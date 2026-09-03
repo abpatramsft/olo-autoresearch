@@ -1068,6 +1068,93 @@ benchmark and gate changed: no
 winning branch merged: no
 ```
 
+# Verified benchmark-free repository example
+
+The complete two-phase workflow was also run with GitHub Copilot CLI on a fresh
+repository containing only:
+
+```text
+README.md
+slugify.py
+project-local Olo files
+```
+
+There were no tests, benchmark, fixtures, or gates.
+
+## Exploration result
+
+`olo-explorer` discovered and recorded:
+
+```text
+Dimension 1: slug correctness, maximize exact-match pass rate
+Dimension 2: throughput, minimize per-slug latency
+Selected: slug correctness
+```
+
+Inside `olo/exp_0000`, it created:
+
+```text
+benchmark/run_benchmark.py
+benchmark/cases.json
+benchmark/heldout.json
+benchmark/gate_invariants.py
+benchmark/gate_heldout.py
+benchmark/.gitignore
+```
+
+The public benchmark contained 20 cases. The disjoint held-out gate contained
+12 additional cases.
+
+The measured baseline was:
+
+```text
+exp_0000
+score: 0.25
+public cases: 5 / 20
+invariant gate: pass
+held-out gate: pass at its baseline floor
+phase: ready-to-optimize
+```
+
+The main checkout still contained no benchmark or gate files.
+
+## Optimization result
+
+`olo-orchestrator` then ran one bounded round with width 1 and budget 1.
+
+`olo-experimenter` created `exp_0001` and replaced the trivial implementation
+with a general slug algorithm that:
+
+- lowercases input;
+- removes punctuation and symbols;
+- preserves letters and digits;
+- collapses whitespace to one hyphen;
+- removes leading and trailing hyphens.
+
+Final result:
+
+```text
+exp_0001
+score: 1.0
+public cases: 20 / 20
+held-out cases: 12 / 12
+invariant gate: pass
+held-out gate: pass
+pre-verification: pass
+post-verification: pass
+changed files: slugify.py only
+merged into main: no
+```
+
+This proves the complete handoff:
+
+```text
+no benchmark
+  -> /olo-explore constructs and commits measurement in exp_0000
+  -> /olo-optimize reads its traces
+  -> candidate improves from 0.25 to 1.0 in exp_0001
+```
+
 # Important limitations
 
 Olo remains a local prototype.

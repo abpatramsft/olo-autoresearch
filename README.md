@@ -346,12 +346,42 @@ The suite covers:
 - hooks;
 - Pareto frontier selection;
 - dashboard API behavior.
+- recovery after discarded or repeatedly failed baselines;
+- rejection of benchmark files modified at candidate runtime.
 
 Browser check:
 
 ```powershell
 python tests/dashboard_browser_check.py --url http://127.0.0.1:8765 --screenshot .olo/dashboard-smoke.png
 ```
+
+## Verified fresh two-phase Copilot run
+
+Olo `0.2.0` was tested on a fresh repository containing only `README.md` and a
+flawed `slugify.py`; it had no tests, benchmark, fixtures, or gates.
+
+`olo-explorer`:
+
+- recorded correctness and throughput dimensions;
+- selected exact-match slug correctness;
+- created a deterministic 20-case benchmark only in `olo/exp_0000`;
+- created a separate 12-case held-out set;
+- created invariant and held-out gates;
+- passed the benchmark-reviewer audit and non-committing wiring check;
+- committed a baseline score of `0.25`;
+- left the main checkout free of benchmark and gate files.
+
+`olo-orchestrator` then ran one bounded `/olo-optimize` round:
+
+- `olo-experimenter` changed only `slugify.py`;
+- public benchmark score improved from `0.25` to `1.0`;
+- all 20 public cases passed;
+- all 12 held-out cases passed;
+- both gates passed;
+- pre and post verification passed;
+- the winner remained on `olo/exp_0001` and was not merged.
+
+The fresh-run dashboard remained live at `http://127.0.0.1:8766`.
 
 ## State and safety
 

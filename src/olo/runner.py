@@ -39,34 +39,54 @@ def _run_shell(
     timeout: int,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    try:
-        process = subprocess.run(
-            command,
-            cwd=cwd,
-            env=env,
-            shell=True,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        return {
-            "returncode": process.returncode,
-            "stdout": process.stdout,
-            "stderr": process.stderr,
-            "timed_out": False,
-            "duration_seconds": time.monotonic() - started,
-        }
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return {
-            "returncode": None,
-            "stdout": stdout,
-            "stderr": stderr,
-            "timed_out": True,
-            "duration_seconds": time.monotonic() - started,
-        }
+    for launch_attempt in range(2):
+        try:
+            process = subprocess.run(
+                command,
+                cwd=cwd,
+                env=env,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+            # Windows occasionally returns HRESULT 0x8007001F from cmd.exe
+            # during rapid check -> baseline process launches. It is a launcher
+            # failure, not the benchmark's exit code, so retry it once.
+            if (
+                os.name == "nt"
+                and process.returncode == 0x8007001F
+                and launch_attempt == 0
+            ):
+                time.sleep(0.1)
+                continue
+            return {
+                "returncode": process.returncode,
+                "stdout": process.stdout,
+                "stderr": process.stderr,
+                "timed_out": False,
+                "duration_seconds": time.monotonic() - started,
+            }
+        except subprocess.TimeoutExpired as exc:
+            stdout = (
+                exc.stdout.decode()
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            )
+            stderr = (
+                exc.stderr.decode()
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or "")
+            )
+            return {
+                "returncode": None,
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": True,
+                "duration_seconds": time.monotonic() - started,
+            }
+    raise RuntimeError("unreachable shell execution state")
 
 
 def parse_benchmark_result(result_path: Path, stdout: str) -> dict[str, Any]:
