@@ -18,6 +18,8 @@ STATE_DIR = ".olo"
 CONFIG_FILE = "config.json"
 GRAPH_FILE = "graph.json"
 META_FILE = "meta.json"
+DISCOVERY_FILE = "discovery.json"
+PROJECT_FILE = "project.md"
 
 
 class StateStore:
@@ -27,6 +29,8 @@ class StateStore:
         self.config_path = self.state_dir / CONFIG_FILE
         self.graph_path = self.state_dir / GRAPH_FILE
         self.meta_path = self.state_dir / META_FILE
+        self.discovery_path = self.state_dir / DISCOVERY_FILE
+        self.project_path = self.state_dir / PROJECT_FILE
         self.lock_path = self.state_dir / "state.lock"
         self.annotations_path = self.state_dir / "annotations.jsonl"
         self.proposals_path = self.state_dir / "proposals.jsonl"
@@ -59,6 +63,8 @@ class StateStore:
         stall_limit: int,
         frontier_strategy: dict[str, Any],
         score_ceiling: float | None,
+        goal: str | None = None,
+        phase: str = "configured",
     ) -> None:
         if self.is_initialized():
             raise RuntimeError(f"Olo is already initialized at {self.state_dir}")
@@ -70,8 +76,10 @@ class StateStore:
             "schema_version": 1,
             "project_name": project_name,
             "repo_root": str(self.root),
+            "phase": phase,
+            "goal": goal,
             "target": target,
-            "editable_paths": editable_paths or [target],
+            "editable_paths": editable_paths or ([target] if target else []),
             "protected_paths": protected_paths,
             "benchmark": benchmark,
             "gates": gates,
@@ -120,14 +128,83 @@ class StateStore:
             "dashboard": {"pid": None, "port": None},
             "created_at": now,
         }
+        discovery = {
+            "status": "exploring" if phase == "exploring" else "configured",
+            "goal": goal,
+            "repo_summary": None,
+            "dimensions": [],
+            "selected_dimension": None,
+            "benchmark_plan": None,
+            "created_at": now,
+            "updated_at": now,
+        }
         atomic_write_json(self.config_path, config)
         atomic_write_json(self.graph_path, graph)
         atomic_write_json(self.meta_path, meta)
+        atomic_write_json(self.discovery_path, discovery)
         self.add_event("workspace_initialized", project_name=project_name, target=target)
+
+    def initialize_exploration(
+        self,
+        *,
+        project_name: str,
+        goal: str | None,
+        root_commit: str,
+        timeout_seconds: int = 300,
+        max_attempts: int = 3,
+        stall_limit: int = 3,
+    ) -> None:
+        self.initialize(
+            project_name=project_name,
+            target="",
+            benchmark="",
+            metric="max",
+            gates=[],
+            root_commit=root_commit,
+            editable_paths=[],
+            protected_paths=[],
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+            stall_limit=stall_limit,
+            frontier_strategy={
+                "kind": "pareto-per-task",
+                "k": 3,
+                "epsilon": 0.1,
+                "temperature": 0.5,
+            },
+            score_ceiling=None,
+            goal=goal,
+            phase="exploring",
+        )
+        self.write_project(
+            "\n".join(
+                [
+                    f"# {project_name}",
+                    "",
+                    "## Goal",
+                    "",
+                    goal or "To be selected during Olo exploration.",
+                    "",
+                    "## Discovery status",
+                    "",
+                    "Exploration has started. Benchmark and gates are not configured yet.",
+                    "",
+                ]
+            )
+        )
 
     def config(self) -> dict[str, Any]:
         self.require_initialized()
-        return read_json(self.config_path, {})
+        config = read_json(self.config_path, {})
+        if "phase" not in config:
+            graph = read_json(self.graph_path, {"nodes": {}})
+            baseline = graph.get("nodes", {}).get("exp_0000")
+            config["phase"] = (
+                "ready-to-optimize"
+                if baseline and baseline.get("status") == "committed"
+                else "configured"
+            )
+        return config
 
     def graph(self) -> dict[str, Any]:
         self.require_initialized()
@@ -137,9 +214,98 @@ class StateStore:
         self.require_initialized()
         return read_json(self.meta_path, {})
 
+    def discovery(self) -> dict[str, Any]:
+        self.require_initialized()
+        return read_json(
+            self.discovery_path,
+            {
+                "status": self.config().get("phase", "configured"),
+                "dimensions": [],
+            },
+        )
+
     def save_config(self, config: dict[str, Any]) -> None:
         with FileLock(self.lock_path):
             atomic_write_json(self.config_path, config)
+
+    def save_discovery(self, discovery: dict[str, Any]) -> None:
+        discovery["updated_at"] = utc_now()
+        with FileLock(self.lock_path):
+            atomic_write_json(self.discovery_path, discovery)
+
+    def mutate_discovery(self, callback: Callable[[dict[str, Any]], Any]) -> Any:
+        with FileLock(self.lock_path):
+            discovery = read_json(
+                self.discovery_path,
+                {"status": "exploring", "dimensions": []},
+            )
+            result = callback(discovery)
+            discovery["updated_at"] = utc_now()
+            atomic_write_json(self.discovery_path, discovery)
+            return result
+
+    def add_dimension(
+        self,
+        *,
+        name: str,
+        description: str,
+        target: str,
+        metric_name: str,
+        direction: str,
+        evidence: str,
+        complexity: str,
+        run_cost: str,
+    ) -> dict[str, Any]:
+        def mutate(discovery: dict[str, Any]) -> dict[str, Any]:
+            dimensions = discovery.setdefault("dimensions", [])
+            if any(item.get("name") == name for item in dimensions):
+                raise RuntimeError(f"discovery dimension already exists: {name}")
+            entry = {
+                "name": name,
+                "description": description,
+                "target": target,
+                "metric_name": metric_name,
+                "direction": direction,
+                "evidence": evidence,
+                "complexity": complexity,
+                "run_cost": run_cost,
+                "created_at": utc_now(),
+            }
+            dimensions.append(entry)
+            discovery["status"] = "dimensions-proposed"
+            return dict(entry)
+
+        result = self.mutate_discovery(mutate)
+        self.add_event("discovery_dimension_added", name=name, target=target)
+        return result
+
+    def select_dimension(self, name: str) -> dict[str, Any]:
+        def mutate(discovery: dict[str, Any]) -> dict[str, Any]:
+            selected = next(
+                (
+                    item
+                    for item in discovery.get("dimensions", [])
+                    if item.get("name") == name
+                ),
+                None,
+            )
+            if selected is None:
+                raise RuntimeError(f"unknown discovery dimension: {name}")
+            discovery["selected_dimension"] = name
+            discovery["status"] = "dimension-selected"
+            return dict(selected)
+
+        result = self.mutate_discovery(mutate)
+        config = self.config()
+        config["goal"] = result.get("description") or config.get("goal")
+        self.save_config(config)
+        self.add_event("discovery_dimension_selected", name=name)
+        return result
+
+    def write_project(self, content: str) -> None:
+        from .utils import atomic_write_text
+
+        atomic_write_text(self.project_path, content.rstrip() + "\n")
 
     def update_node(self, exp_id: str, **changes: Any) -> dict[str, Any]:
         with FileLock(self.lock_path):
@@ -159,7 +325,13 @@ class StateStore:
             atomic_write_json(self.meta_path, meta)
             return result
 
-    def reserve_experiment(self, parent_id: str, hypothesis: str) -> dict[str, Any]:
+    def reserve_experiment(
+        self,
+        parent_id: str,
+        hypothesis: str,
+        *,
+        kind: str = "experiment",
+    ) -> dict[str, Any]:
         with FileLock(self.lock_path):
             graph = read_json(self.graph_path, {"nodes": {}})
             meta = read_json(self.meta_path, {"next_id": 0})
@@ -177,6 +349,7 @@ class StateStore:
             worktree = self.worktrees_dir / exp_id
             node = {
                 "id": exp_id,
+                "kind": kind,
                 "parent": parent_id,
                 "children": [],
                 "status": "pending",
@@ -305,6 +478,9 @@ class StateStore:
         port = dashboard.get("port")
         return {
             "project_name": config.get("project_name"),
+            "phase": config.get("phase", "configured"),
+            "goal": config.get("goal"),
+            "discovery_status": self.discovery().get("status"),
             "target": config.get("target"),
             "metric": config.get("metric"),
             "best_score": None if best is None else best.get("score"),
@@ -361,7 +537,7 @@ class StateStore:
             "",
             "## Status",
             (
-                f"- metric={status['metric']} best={status['best_score']} "
+                f"- phase={status['phase']} metric={status['metric']} best={status['best_score']} "
                 f"experiment={status['best_experiment']} total={status['experiments']}"
             ),
             f"- counts={status['counts']}",
@@ -372,6 +548,23 @@ class StateStore:
             *self.tree_lines(),
             "```",
         ]
+        discovery = self.discovery()
+        if status["phase"] != "ready-to-optimize":
+            lines.extend(
+                [
+                    "",
+                    "## Discovery",
+                    f"- status={discovery.get('status')}",
+                    f"- goal={discovery.get('goal') or status.get('goal')}",
+                    f"- selected={discovery.get('selected_dimension')}",
+                ]
+            )
+            for dimension in discovery.get("dimensions", []):
+                lines.append(
+                    f"- {dimension.get('name')}: {dimension.get('description')} "
+                    f"(target={dimension.get('target')}, "
+                    f"metric={dimension.get('metric_name')} {dimension.get('direction')})"
+                )
         if discarded:
             lines.extend(["", "## What Not To Repeat"])
             for node in discarded[-10:]:

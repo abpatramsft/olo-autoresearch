@@ -114,17 +114,22 @@ def run_experiment(
     exp_id: str,
     *,
     timeout_override: int | None = None,
+    check: bool = False,
 ) -> dict[str, Any]:
     config = store.config()
     graph = store.graph()
     node = graph.get("nodes", {}).get(exp_id)
     if node is None:
         raise RuntimeError(f"unknown experiment: {exp_id}")
-    if node.get("status") == "committed":
+    if not config.get("target") or not config.get("benchmark"):
+        raise RuntimeError(
+            "benchmark configuration is incomplete; finish `python olo.py explore configure` first"
+        )
+    if node.get("status") == "committed" and not check:
         raise RuntimeError(f"{exp_id} is already committed")
     attempts = int(node.get("attempts", 0))
     max_attempts = int(config.get("max_attempts", 3))
-    if attempts >= max_attempts:
+    if not check and attempts >= max_attempts:
         raise RuntimeError(
             f"{exp_id} reached max_attempts={max_attempts}; discard it or create a sibling"
         )
@@ -132,22 +137,39 @@ def run_experiment(
     worktree = Path(node["worktree"])
     if not worktree.exists():
         raise RuntimeError(f"experiment worktree is missing: {worktree}")
-    attempt = attempts + 1
-    attempt_dir = store.attempt_dir(exp_id, attempt)
-    traces_dir = store.traces_dir(exp_id, attempt)
+    target = worktree / str(config["target"])
+    if not target.exists():
+        raise RuntimeError(f"configured target does not exist in worktree: {target}")
+    if check:
+        checks_root = store.experiment_dir(exp_id) / "checks"
+        existing = [
+            int(path.name)
+            for path in checks_root.iterdir()
+            if path.is_dir() and path.name.isdigit()
+        ] if checks_root.exists() else []
+        attempt = max(existing, default=0) + 1
+        attempt_dir = checks_root / f"{attempt:03d}"
+        traces_dir = attempt_dir / "traces"
+    else:
+        attempt = attempts + 1
+        attempt_dir = store.attempt_dir(exp_id, attempt)
+        traces_dir = store.traces_dir(exp_id, attempt)
     attempt_dir.mkdir(parents=True, exist_ok=True)
     traces_dir.mkdir(parents=True, exist_ok=True)
     result_path = attempt_dir / "benchmark-result.json"
     timeout = int(timeout_override or config.get("timeout_seconds", 300))
-    store.update_node(exp_id, status="active", attempts=attempt, current_attempt=attempt)
-    store.add_event("experiment_started", experiment_id=exp_id, attempt=attempt)
+    if not check:
+        store.update_node(exp_id, status="active", attempts=attempt, current_attempt=attempt)
+        store.add_event("experiment_started", experiment_id=exp_id, attempt=attempt)
+    else:
+        store.add_event("experiment_check_started", experiment_id=exp_id, check=attempt)
 
-    pre = verify_experiment(store, exp_id, phase="pre", persist=True)
+    pre = verify_experiment(store, exp_id, phase="pre", persist=not check)
     if not pre["passed"]:
         outcome = {
             "experiment_id": exp_id,
-            "attempt": attempt,
-            "status": "failed",
+            "check" if check else "attempt": attempt,
+            "status": "check-failed" if check else "failed",
             "score": None,
             "parent_score": None,
             "gates_passed": False,
@@ -158,11 +180,14 @@ def run_experiment(
             "verification": pre,
             "created_at": utc_now(),
         }
-        atomic_write_json(attempt_dir / "outcome.json", outcome)
-        store.update_node(exp_id, status="failed", error=outcome["error"])
+        atomic_write_json(
+            attempt_dir / ("check.json" if check else "outcome.json"),
+            outcome,
+        )
+        if not check:
+            store.update_node(exp_id, status="failed", error=outcome["error"])
         return outcome
 
-    target = worktree / str(config["target"])
     benchmark_command = fill_command(str(config["benchmark"]), worktree, target)
     env = os.environ.copy()
     env.update(
@@ -235,11 +260,48 @@ def run_experiment(
     gates_passed = benchmark_error is None and all(
         item["passed"] for item in gate_results
     )
+    trace_count = len(list(traces_dir.glob("*.json")))
+    score = None if result is None else float(result["score"])
+    if check:
+        status = (
+            "check-passed"
+            if benchmark_error is None and gates_passed
+            else "check-failed"
+        )
+        outcome = {
+            "experiment_id": exp_id,
+            "check": attempt,
+            "status": status,
+            "score": score,
+            "gates_passed": gates_passed,
+            "gate_results": gate_results,
+            "benchmark": {
+                "command": benchmark_command,
+                "returncode": benchmark["returncode"],
+                "timed_out": benchmark["timed_out"],
+                "result": result,
+            },
+            "changed_files": files,
+            "trace_count": trace_count,
+            "duration_seconds": float(benchmark["duration_seconds"]),
+            "error": benchmark_error,
+            "verification": pre,
+            "created_at": utc_now(),
+        }
+        atomic_write_json(attempt_dir / "check.json", outcome)
+        store.add_event(
+            "experiment_check_finished",
+            experiment_id=exp_id,
+            check=attempt,
+            status=status,
+            score=score,
+        )
+        return outcome
+
     parent = graph["nodes"][node["parent"]]
     parent_score = (
         None if parent.get("score") is None else float(parent.get("score"))
     )
-    score = None if result is None else float(result["score"])
     improved = (
         score is not None
         and gates_passed
@@ -257,7 +319,6 @@ def run_experiment(
     else:
         status = "evaluated"
 
-    trace_count = len(list(traces_dir.glob("*.json")))
     outcome = {
         "experiment_id": exp_id,
         "attempt": attempt,
@@ -303,4 +364,19 @@ def run_experiment(
         score=score,
         improved=improved,
     )
+    if node.get("kind") == "baseline" and status == "committed":
+        config["phase"] = "ready-to-optimize"
+        store.save_config(config)
+
+        def mark_ready(discovery: dict[str, Any]) -> None:
+            discovery["status"] = "ready-to-optimize"
+            discovery["baseline_experiment"] = exp_id
+            discovery["baseline_score"] = score
+
+        store.mutate_discovery(mark_ready)
+        store.add_event(
+            "exploration_completed",
+            baseline_experiment=exp_id,
+            baseline_score=score,
+        )
     return outcome

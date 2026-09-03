@@ -28,17 +28,26 @@ def _session_start(store: StateStore) -> dict[str, Any]:
         return {
             "additionalContext": (
                 "This repository contains the project-local Olo autoresearch kit. "
-                "Use the /olo-autoresearch skill when asked to initialize or run "
-                "structured optimization experiments."
+                "Use /olo-explore to identify a goal and build the baseline, then "
+                "use /olo-optimize for experiment rounds."
             )
         }
     status = store.status_summary()
+    if status.get("phase") != "ready-to-optimize":
+        return {
+            "additionalContext": (
+                f"Olo is in exploration phase `{status.get('phase')}` with discovery "
+                f"status `{status.get('discovery_status')}`. Use /olo-explore and "
+                "`python olo.py explore status`; do not start optimization until "
+                "exp_0000 is committed."
+            )
+        }
     return {
         "additionalContext": (
             "Olo autoresearch is initialized. "
             f"Target: {status['target']}; best: {status['best_score']} "
             f"({status['best_experiment']}); mode: {status['mode'].get('status')}. "
-            "Use /olo-autoresearch and `python olo.py scratchpad` before proposing "
+            "Use /olo-optimize and `python olo.py scratchpad` before proposing "
             "or running candidate changes."
         )
     }
@@ -118,6 +127,14 @@ def _agent_stop(store: StateStore, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _subagent_start(payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("agentName") or payload.get("agent_name") or "")
+    if name == "olo-explorer":
+        return {
+            "additionalContext": (
+                "Keep main clean. Prepare exp_0000 first, then create benchmark, "
+                "fixtures, instrumentation, and gates only inside that baseline "
+                "worktree. Finish only after the checked baseline is committed."
+            )
+        }
     if name == "olo-experimenter":
         return {
             "additionalContext": (

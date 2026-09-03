@@ -77,7 +77,8 @@ function renderSummary(data) {
   ui.targetName.textContent = status.target || "target not configured";
   ui.bestScore.textContent = formatScore(status.best_score);
   ui.bestExperiment.textContent = status.best_experiment || "no baseline";
-  ui.modeStatus.textContent = mode.status || "idle";
+  ui.modeStatus.textContent =
+    mode.status && mode.status !== "idle" ? mode.status : status.phase || "idle";
   ui.stallStatus.textContent =
     `stall ${mode.stall_count || 0} / ${mode.stall_limit || 0}`;
   ui.experimentCount.textContent = String(status.experiments || 0);

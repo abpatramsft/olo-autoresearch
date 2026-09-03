@@ -46,6 +46,16 @@ def _normalize_relative(root: Path, raw: str) -> str:
     return relative.as_posix()
 
 
+def _normalize_relative_to(base: Path, raw: str) -> str:
+    path = Path(raw)
+    absolute = path.resolve() if path.is_absolute() else (base / path).resolve()
+    try:
+        relative = absolute.relative_to(base.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"path must be inside the experiment worktree: {raw}") from exc
+    return relative.as_posix()
+
+
 def _parse_gate(raw: str, index: int) -> dict[str, str]:
     if "::" in raw:
         name, command = raw.split("::", 1)
@@ -148,10 +158,16 @@ def _stop_dashboard(store: StateStore) -> dict[str, Any]:
     return {"stopped": bool(pid), "pid": pid or None, "port": port}
 
 
-def _allocate(store: StateStore, parent_id: str, hypothesis: str) -> dict[str, Any]:
+def _allocate(
+    store: StateStore,
+    parent_id: str,
+    hypothesis: str,
+    *,
+    kind: str = "experiment",
+) -> dict[str, Any]:
     graph = store.graph()
     commit = parent_commit(graph, parent_id)
-    node = store.reserve_experiment(parent_id, hypothesis)
+    node = store.reserve_experiment(parent_id, hypothesis, kind=kind)
     try:
         create_worktree(
             store.root,
@@ -169,6 +185,216 @@ def _allocate(store: StateStore, parent_id: str, hypothesis: str) -> dict[str, A
         hypothesis=hypothesis,
     )
     return node
+
+
+def cmd_explore_init(args: argparse.Namespace, root: Path) -> int:
+    ensure_repo_ready(root)
+    if not args.allow_dirty:
+        ensure_clean(root)
+    store = StateStore(root)
+    add_local_exclude(root)
+    store.initialize_exploration(
+        project_name=args.name or root.name,
+        goal=args.goal,
+        root_commit=head_commit(root),
+        timeout_seconds=args.timeout,
+        max_attempts=args.max_attempts,
+        stall_limit=args.stall_limit,
+    )
+    result: dict[str, Any] = {
+        "initialized": True,
+        "phase": "exploring",
+        "goal": args.goal,
+        "state_dir": str(store.state_dir),
+        "next": "Inspect the repository and record candidate dimensions.",
+    }
+    if not args.no_dashboard:
+        result["dashboard"] = _start_dashboard_background(
+            store,
+            preferred_port=args.port,
+        )
+    _json(result)
+    return 0
+
+
+def _baseline_node(store: StateStore) -> dict[str, Any] | None:
+    return store.graph().get("nodes", {}).get("exp_0000")
+
+
+def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
+    if args.explore_command == "status":
+        _json(
+            {
+                "config": store.config(),
+                "discovery": store.discovery(),
+                "baseline": _baseline_node(store),
+            }
+        )
+        return 0
+    if args.explore_command == "add-dimension":
+        target = args.target.replace("\\", "/")
+        entry = store.add_dimension(
+            name=args.name,
+            description=args.description,
+            target=target,
+            metric_name=args.metric_name,
+            direction=args.direction,
+            evidence=args.evidence,
+            complexity=args.complexity,
+            run_cost=args.run_cost,
+        )
+        _json(entry)
+        return 0
+    if args.explore_command == "list-dimensions":
+        discovery = store.discovery()
+        _json(
+            {
+                "selected_dimension": discovery.get("selected_dimension"),
+                "dimensions": discovery.get("dimensions", []),
+            }
+        )
+        return 0
+    if args.explore_command == "select":
+        _json(store.select_dimension(args.name))
+        return 0
+    if args.explore_command != "configure":
+        raise RuntimeError(f"unknown explore command: {args.explore_command}")
+
+    baseline = _baseline_node(store)
+    if baseline is None or not baseline.get("worktree"):
+        raise RuntimeError(
+            "prepare the baseline worktree first with `python olo.py baseline --prepare`"
+        )
+    worktree = Path(baseline["worktree"])
+    if not worktree.exists():
+        raise RuntimeError(f"baseline worktree is missing: {worktree}")
+    target = _normalize_relative_to(worktree, args.target)
+    if not (worktree / target).exists():
+        raise RuntimeError(f"target does not exist in baseline worktree: {target}")
+    editable = [
+        _normalize_relative_to(worktree, item)
+        for item in (args.editable or [target])
+    ]
+    protected = [
+        _normalize_relative_to(worktree, item)
+        for item in (args.protect or [])
+    ]
+    for path in protected:
+        if not (worktree / path).exists():
+            raise RuntimeError(f"protected path does not exist in baseline worktree: {path}")
+    gates = [_parse_gate(raw, i + 1) for i, raw in enumerate(args.gate or [])]
+    if args.benchmark_origin == "constructed" and not gates:
+        raise RuntimeError("a constructed benchmark requires at least one real gate")
+
+    config = store.config()
+    config.update(
+        {
+            "phase": "ready-for-baseline",
+            "target": target,
+            "editable_paths": editable,
+            "protected_paths": protected,
+            "benchmark": args.benchmark,
+            "benchmark_origin": args.benchmark_origin,
+            "metric": args.metric,
+            "gates": gates,
+            "timeout_seconds": args.timeout,
+            "max_attempts": args.max_attempts,
+            "stall_limit": args.stall_limit,
+            "frontier_strategy": {
+                "kind": args.strategy,
+                "k": args.frontier_k,
+                "epsilon": args.epsilon,
+                "temperature": args.temperature,
+            },
+            "score_ceiling": args.score_ceiling,
+            "benchmark_unit": args.unit,
+            "benchmark_determinism": args.determinism,
+            "resource_profile": args.resource_profile,
+            "meaningful_improvement": args.meaningful_improvement,
+        }
+    )
+    store.save_config(config)
+
+    def mark_configured(discovery: dict[str, Any]) -> None:
+        discovery["status"] = "ready-for-baseline"
+        discovery["repo_summary"] = args.repo_summary
+        discovery["benchmark_plan"] = {
+            "origin": args.benchmark_origin,
+            "command": args.benchmark,
+            "unit": args.unit,
+            "metric": args.metric,
+            "determinism": args.determinism,
+            "resource_profile": args.resource_profile,
+            "gaming_risks": args.gaming_risk or [],
+        }
+
+    store.mutate_discovery(mark_configured)
+    selected = store.discovery().get("selected_dimension")
+    project_lines = [
+        f"# {config.get('project_name')}",
+        "",
+        "## Goal",
+        "",
+        str(config.get("goal") or "Selected during exploration."),
+        "",
+        "## Repository summary",
+        "",
+        args.repo_summary,
+        "",
+        "## Selected optimization dimension",
+        "",
+        str(selected or "Direct user goal"),
+        "",
+        "## Target and boundaries",
+        "",
+        f"- Target: `{target}`",
+        f"- Editable: {', '.join(f'`{item}`' for item in editable)}",
+        f"- Protected: {', '.join(f'`{item}`' for item in protected) or 'none'}",
+        "",
+        "## Benchmark",
+        "",
+        f"- Origin: {args.benchmark_origin}",
+        f"- Command: `{args.benchmark}`",
+        f"- Unit: {args.unit}",
+        f"- Direction: {args.metric}",
+        f"- Meaningful improvement: {args.meaningful_improvement}",
+        f"- Determinism: {args.determinism}",
+        "",
+        "## Resource profile",
+        "",
+        args.resource_profile,
+        "",
+        "## Benchmark gaming risks",
+        "",
+    ]
+    project_lines.extend(
+        [f"- {item}" for item in (args.gaming_risk or ["No risks recorded."])]
+    )
+    project_lines.extend(["", "## Future experiment candidates", ""])
+    project_lines.extend(
+        [f"- {item}" for item in (args.future_dimension or ["None recorded."])]
+    )
+    store.write_project("\n".join(project_lines))
+    store.add_event(
+        "exploration_configured",
+        target=target,
+        benchmark_origin=args.benchmark_origin,
+        metric=args.metric,
+    )
+    _json(
+        {
+            "phase": "ready-for-baseline",
+            "target": target,
+            "benchmark": args.benchmark,
+            "gates": gates,
+            "protected_paths": protected,
+            "next": (
+                "Run `python olo.py run exp_0000 --check`, audit with "
+                "olo-benchmark-reviewer, then run `python olo.py baseline`."
+            ),
+        }
+    )
+    return 0
 
 
 def cmd_init(args: argparse.Namespace, root: Path) -> int:
@@ -218,19 +444,46 @@ def cmd_init(args: argparse.Namespace, root: Path) -> int:
 
 
 def cmd_baseline(args: argparse.Namespace, store: StateStore) -> int:
-    if int(store.meta().get("next_id", 0)) != 0:
-        raise RuntimeError("baseline must be the first Olo experiment")
-    node = _allocate(
-        store,
-        "root",
-        args.hypothesis or "Measure the unchanged repository baseline.",
-    )
+    node = _baseline_node(store)
+    if node is None:
+        if int(store.meta().get("next_id", 0)) != 0:
+            raise RuntimeError("baseline must be the first Olo experiment")
+        node = _allocate(
+            store,
+            "root",
+            args.hypothesis
+            or "Baseline: construct or instrument the benchmark and measure the unchanged target.",
+            kind="baseline",
+        )
+    elif node.get("kind") != "baseline":
+        raise RuntimeError("exp_0000 exists but is not an Olo baseline node")
+    if args.prepare:
+        _json(
+            {
+                "experiment_id": node["id"],
+                "branch": node["branch"],
+                "worktree": node["worktree"],
+                "status": node["status"],
+                "next": "Create or instrument the benchmark and gates in this worktree.",
+            }
+        )
+        return 0
+    if node.get("status") == "committed":
+        raise RuntimeError("the Olo baseline is already committed")
+    if store.config().get("phase") not in {"configured", "ready-for-baseline"}:
+        raise RuntimeError(
+            "exploration is not configured; run `python olo.py explore configure ...`"
+        )
     outcome = run_experiment(store, node["id"], timeout_override=args.timeout)
     _json(outcome)
     return 0 if outcome["status"] == "committed" else 1
 
 
 def cmd_new(args: argparse.Namespace, store: StateStore) -> int:
+    if store.config().get("phase", "configured") != "ready-to-optimize":
+        raise RuntimeError(
+            "Olo is not ready to optimize; complete exploration and commit the baseline first"
+        )
     node = _allocate(store, args.parent, args.hypothesis)
     _json(
         {
@@ -245,9 +498,15 @@ def cmd_new(args: argparse.Namespace, store: StateStore) -> int:
 
 
 def cmd_run(args: argparse.Namespace, store: StateStore) -> int:
-    outcome = run_experiment(store, args.experiment_id, timeout_override=args.timeout)
+    outcome = run_experiment(
+        store,
+        args.experiment_id,
+        timeout_override=args.timeout,
+        check=args.check,
+    )
     _json(outcome)
-    return 0 if outcome["status"] in {"committed", "evaluated"} else 1
+    accepted = {"committed", "evaluated", "check-passed"}
+    return 0 if outcome["status"] in accepted else 1
 
 
 def cmd_discard(args: argparse.Namespace, store: StateStore) -> int:
@@ -285,7 +544,7 @@ def cmd_status(args: argparse.Namespace, store: StateStore) -> int:
         _json(status)
     else:
         print(
-            f"{status['project_name']}: best={status['best_score']} "
+            f"{status['project_name']}: phase={status['phase']} best={status['best_score']} "
             f"({status['best_experiment']}) metric={status['metric']} "
             f"experiments={status['experiments']} counts={status['counts']}"
         )
@@ -423,6 +682,10 @@ def cmd_strategy(args: argparse.Namespace, store: StateStore) -> int:
 
 def cmd_mode(args: argparse.Namespace, store: StateStore) -> int:
     if args.mode_command == "start":
+        if store.config().get("phase") != "ready-to-optimize":
+            raise RuntimeError(
+                "Olo is not ready to optimize; finish `/olo-explore` and commit the baseline"
+            )
         _json(
             store.mode_start(
                 autonomous=not args.bounded,
@@ -526,19 +789,23 @@ def cmd_doctor(store: StateStore) -> int:
     check("initialized", store.is_initialized(), str(store.state_dir))
     if store.is_initialized():
         config = store.config()
+        phase = config.get("phase", "configured")
         check(
             "target",
-            (store.root / config["target"]).exists(),
-            config["target"],
+            phase == "exploring" or (store.root / config.get("target", "")).exists(),
+            config.get("target") or "pending discovery",
         )
     check(
-        "skill",
-        (store.root / ".github/skills/olo-autoresearch/SKILL.md").exists(),
-        ".github/skills/olo-autoresearch/SKILL.md",
+        "skills",
+        all(
+            (store.root / ".github/skills" / name / "SKILL.md").exists()
+            for name in ("olo-autoresearch", "olo-explore", "olo-optimize")
+        ),
+        ".github/skills/olo-autoresearch, olo-explore, and olo-optimize",
     )
     check(
         "agents",
-        len(list((store.root / ".github/agents").glob("olo-*.agent.md"))) >= 4,
+        len(list((store.root / ".github/agents").glob("olo-*.agent.md"))) >= 6,
         ".github/agents/olo-*.agent.md",
     )
     check(
@@ -560,6 +827,76 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("version")
+
+    explore = sub.add_parser("explore")
+    explore_sub = explore.add_subparsers(dest="explore_command", required=True)
+    explore_init = explore_sub.add_parser("init")
+    explore_init.add_argument("--name")
+    explore_init.add_argument("--goal")
+    explore_init.add_argument("--timeout", type=int, default=300)
+    explore_init.add_argument("--max-attempts", type=int, default=3)
+    explore_init.add_argument("--stall-limit", type=int, default=3)
+    explore_init.add_argument("--allow-dirty", action="store_true")
+    explore_init.add_argument("--no-dashboard", action="store_true")
+    explore_init.add_argument("--port", type=int, default=8765)
+    explore_sub.add_parser("status")
+
+    add_dimension = explore_sub.add_parser("add-dimension")
+    add_dimension.add_argument("--name", required=True)
+    add_dimension.add_argument("--description", required=True)
+    add_dimension.add_argument("--target", required=True)
+    add_dimension.add_argument("--metric-name", required=True)
+    add_dimension.add_argument("--direction", choices=["max", "min"], required=True)
+    add_dimension.add_argument("--evidence", required=True)
+    add_dimension.add_argument(
+        "--complexity",
+        choices=["none", "minor", "substantial"],
+        required=True,
+    )
+    add_dimension.add_argument(
+        "--run-cost",
+        choices=["small", "medium", "large"],
+        required=True,
+    )
+    explore_sub.add_parser("list-dimensions")
+    select_dimension = explore_sub.add_parser("select")
+    select_dimension.add_argument("--name", required=True)
+
+    configure = explore_sub.add_parser("configure")
+    configure.add_argument("--target", required=True)
+    configure.add_argument("--benchmark", required=True)
+    configure.add_argument(
+        "--benchmark-origin",
+        choices=["existing", "wrapped", "constructed"],
+        required=True,
+    )
+    configure.add_argument("--metric", choices=["max", "min"], default="max")
+    configure.add_argument("--gate", action="append")
+    configure.add_argument("--editable", action="append")
+    configure.add_argument("--protect", action="append")
+    configure.add_argument("--timeout", type=int, default=300)
+    configure.add_argument("--max-attempts", type=int, default=3)
+    configure.add_argument("--stall-limit", type=int, default=3)
+    configure.add_argument(
+        "--strategy",
+        choices=["argmax", "top-k", "epsilon-greedy", "softmax", "pareto-per-task"],
+        default="pareto-per-task",
+    )
+    configure.add_argument("--frontier-k", type=int, default=3)
+    configure.add_argument("--epsilon", type=float, default=0.1)
+    configure.add_argument("--temperature", type=float, default=0.5)
+    configure.add_argument("--score-ceiling", type=float)
+    configure.add_argument("--unit", required=True)
+    configure.add_argument(
+        "--determinism",
+        choices=["deterministic", "temp-zero", "noisy"],
+        required=True,
+    )
+    configure.add_argument("--resource-profile", required=True)
+    configure.add_argument("--meaningful-improvement", required=True)
+    configure.add_argument("--repo-summary", required=True)
+    configure.add_argument("--gaming-risk", action="append")
+    configure.add_argument("--future-dimension", action="append")
 
     init = sub.add_parser("init")
     init.add_argument("--name")
@@ -588,6 +925,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline = sub.add_parser("baseline")
     baseline.add_argument("--hypothesis")
     baseline.add_argument("--timeout", type=int)
+    baseline.add_argument("--prepare", action="store_true")
 
     new = sub.add_parser("new")
     new.add_argument("--parent", required=True)
@@ -596,6 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("experiment_id")
     run.add_argument("--timeout", type=int)
+    run.add_argument("--check", action="store_true")
 
     discard = sub.add_parser("discard")
     discard.add_argument("experiment_id")
@@ -728,8 +1067,11 @@ def main(argv: list[str] | None = None) -> int:
         store = StateStore(root)
         if args.command == "init":
             return cmd_init(args, root)
+        if args.command == "explore" and args.explore_command == "init":
+            return cmd_explore_init(args, root)
         store.require_initialized()
         commands = {
+            "explore": lambda: cmd_explore(args, store),
             "baseline": lambda: cmd_baseline(args, store),
             "new": lambda: cmd_new(args, store),
             "run": lambda: cmd_run(args, store),

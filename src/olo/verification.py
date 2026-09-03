@@ -9,13 +9,19 @@ from .state import StateStore
 
 
 def _normalized(path: str) -> str:
-    return path.replace("\\", "/").strip("./")
+    value = path.replace("\\", "/").strip()
+    while value.startswith("./"):
+        value = value[2:]
+    value = value.rstrip("/")
+    return value or "."
 
 
 def _covered(path: str, roots: list[str]) -> bool:
     candidate = _normalized(path)
     for root in roots:
         allowed = _normalized(root).rstrip("/")
+        if allowed in {"", "."}:
+            return True
         if candidate == allowed or candidate.startswith(allowed + "/"):
             return True
     return False
@@ -43,6 +49,7 @@ def verify_experiment(
         protected = list(config.get("protected_paths") or [])
         editable = list(config.get("editable_paths") or [config.get("target")])
         parent_is_root = node.get("parent") == "root"
+        baseline_setup = parent_is_root and node.get("kind") == "baseline"
 
         if not worktree.exists():
             findings.append(
@@ -65,7 +72,7 @@ def verify_experiment(
                 }
             )
         for path in files:
-            if _covered(path, protected):
+            if not baseline_setup and _covered(path, protected):
                 findings.append(
                     {
                         "severity": "block",
@@ -75,7 +82,7 @@ def verify_experiment(
                         "fix": "revert benchmark, gate, and fixture changes",
                     }
                 )
-            elif editable and not _covered(path, editable):
+            elif not baseline_setup and editable and not _covered(path, editable):
                 findings.append(
                     {
                         "severity": "block",
@@ -86,7 +93,7 @@ def verify_experiment(
                     }
                 )
         hypothesis = str(node.get("hypothesis") or "").strip()
-        if len(hypothesis) < 35:
+        if not baseline_setup and len(hypothesis) < 35:
             findings.append(
                 {
                     "severity": "warn",
