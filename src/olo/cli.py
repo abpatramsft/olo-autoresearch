@@ -28,7 +28,7 @@ from .gitops import (
 from .hooks import handle_hook
 from .runner import run_experiment
 from .state import StateStore
-from .utils import is_pid_running
+from .utils import FileLock, atomic_write_json, is_pid_running, read_json, utc_now
 from .verification import verify_experiment
 
 
@@ -221,6 +221,44 @@ def _baseline_node(store: StateStore) -> dict[str, Any] | None:
     return store.graph().get("nodes", {}).get("exp_0000")
 
 
+def _recreate_discarded_baseline(store: StateStore) -> dict[str, Any]:
+    with FileLock(store.lock_path):
+        graph = read_json(store.graph_path, {"root": "root", "nodes": {}})
+        node = graph.get("nodes", {}).get("exp_0000")
+        if node is None or node.get("status") != "discarded":
+            raise RuntimeError("exp_0000 is not a discarded baseline")
+        root_node = graph["nodes"]["root"]
+        if "exp_0000" not in root_node.setdefault("children", []):
+            root_node["children"].append("exp_0000")
+        node.update(
+            {
+                "kind": "baseline",
+                "status": "pending",
+                "score": None,
+                "tasks": {},
+                "commit": None,
+                "branch": "olo/exp_0000",
+                "worktree": str(store.worktrees_dir / "exp_0000"),
+                "attempts": 0,
+                "gate_results": [],
+                "changed_files": [],
+                "error": None,
+                "discard_reason": None,
+                "failure_class": None,
+                "updated_at": utc_now(),
+            }
+        )
+        atomic_write_json(store.graph_path, graph)
+    create_worktree(
+        store.root,
+        Path(node["worktree"]),
+        str(node["branch"]),
+        str(graph["nodes"]["root"]["commit"]),
+    )
+    store.add_event("baseline_recreated", experiment_id="exp_0000")
+    return dict(node)
+
+
 def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
     if args.explore_command == "status":
         _json(
@@ -261,6 +299,11 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
         raise RuntimeError(f"unknown explore command: {args.explore_command}")
 
     baseline = _baseline_node(store)
+    if baseline and baseline.get("status") == "committed":
+        raise RuntimeError(
+            "the baseline is already committed; start a new Olo workspace before "
+            "changing the measurement system"
+        )
     if baseline is None or not baseline.get("worktree"):
         raise RuntimeError(
             "prepare the baseline worktree first with `python olo.py baseline --prepare`"
@@ -297,22 +340,48 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
             "benchmark_origin": args.benchmark_origin,
             "metric": args.metric,
             "gates": gates,
-            "timeout_seconds": args.timeout,
-            "max_attempts": args.max_attempts,
-            "stall_limit": args.stall_limit,
-            "frontier_strategy": {
-                "kind": args.strategy,
-                "k": args.frontier_k,
-                "epsilon": args.epsilon,
-                "temperature": args.temperature,
-            },
-            "score_ceiling": args.score_ceiling,
             "benchmark_unit": args.unit,
             "benchmark_determinism": args.determinism,
             "resource_profile": args.resource_profile,
             "meaningful_improvement": args.meaningful_improvement,
         }
     )
+    if args.timeout is not None:
+        config["timeout_seconds"] = args.timeout
+    if args.max_attempts is not None:
+        config["max_attempts"] = args.max_attempts
+    if args.stall_limit is not None:
+        config["stall_limit"] = args.stall_limit
+    if args.score_ceiling is not None:
+        config["score_ceiling"] = args.score_ceiling
+    if any(
+        value is not None
+        for value in (
+            args.strategy,
+            args.frontier_k,
+            args.epsilon,
+            args.temperature,
+        )
+    ):
+        current_strategy = dict(config.get("frontier_strategy") or {})
+        config["frontier_strategy"] = {
+            "kind": args.strategy or current_strategy.get("kind", "pareto-per-task"),
+            "k": (
+                args.frontier_k
+                if args.frontier_k is not None
+                else current_strategy.get("k", 3)
+            ),
+            "epsilon": (
+                args.epsilon
+                if args.epsilon is not None
+                else current_strategy.get("epsilon", 0.1)
+            ),
+            "temperature": (
+                args.temperature
+                if args.temperature is not None
+                else current_strategy.get("temperature", 0.5)
+            ),
+        }
     store.save_config(config)
 
     def mark_configured(discovery: dict[str, Any]) -> None:
@@ -444,6 +513,7 @@ def cmd_init(args: argparse.Namespace, root: Path) -> int:
 
 
 def cmd_baseline(args: argparse.Namespace, store: StateStore) -> int:
+    ensure_clean(store.root)
     node = _baseline_node(store)
     if node is None:
         if int(store.meta().get("next_id", 0)) != 0:
@@ -457,6 +527,8 @@ def cmd_baseline(args: argparse.Namespace, store: StateStore) -> int:
         )
     elif node.get("kind") != "baseline":
         raise RuntimeError("exp_0000 exists but is not an Olo baseline node")
+    elif node.get("status") == "discarded":
+        node = _recreate_discarded_baseline(store)
     if args.prepare:
         _json(
             {
@@ -790,10 +862,20 @@ def cmd_doctor(store: StateStore) -> int:
     if store.is_initialized():
         config = store.config()
         phase = config.get("phase", "configured")
+        target = config.get("target", "")
+        baseline = _baseline_node(store)
+        baseline_target_exists = bool(
+            target
+            and baseline
+            and baseline.get("worktree")
+            and (Path(baseline["worktree"]) / target).exists()
+        )
         check(
             "target",
-            phase == "exploring" or (store.root / config.get("target", "")).exists(),
-            config.get("target") or "pending discovery",
+            phase == "exploring"
+            or (bool(target) and (store.root / target).exists())
+            or baseline_target_exists,
+            target or "pending discovery",
         )
     check(
         "skills",
@@ -874,17 +956,16 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--gate", action="append")
     configure.add_argument("--editable", action="append")
     configure.add_argument("--protect", action="append")
-    configure.add_argument("--timeout", type=int, default=300)
-    configure.add_argument("--max-attempts", type=int, default=3)
-    configure.add_argument("--stall-limit", type=int, default=3)
+    configure.add_argument("--timeout", type=int)
+    configure.add_argument("--max-attempts", type=int)
+    configure.add_argument("--stall-limit", type=int)
     configure.add_argument(
         "--strategy",
         choices=["argmax", "top-k", "epsilon-greedy", "softmax", "pareto-per-task"],
-        default="pareto-per-task",
     )
-    configure.add_argument("--frontier-k", type=int, default=3)
-    configure.add_argument("--epsilon", type=float, default=0.1)
-    configure.add_argument("--temperature", type=float, default=0.5)
+    configure.add_argument("--frontier-k", type=int)
+    configure.add_argument("--epsilon", type=float)
+    configure.add_argument("--temperature", type=float)
     configure.add_argument("--score-ceiling", type=float)
     configure.add_argument("--unit", required=True)
     configure.add_argument(

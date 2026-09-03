@@ -50,6 +50,11 @@ evidence.
 Initialization creates Olo state and starts the dashboard, but leaves target,
 benchmark, and gates unconfigured.
 
+If Olo already reports `phase=ready-for-baseline` and `config.json` already has
+a target and benchmark, it came from the direct `olo init` compatibility path.
+Skip goal construction and `explore configure`; prepare/check/audit the baseline
+and run `python olo.py baseline`.
+
 ## 2. Explore the repository
 
 Read the README, entry points, package manifests, tests, examples, profiling

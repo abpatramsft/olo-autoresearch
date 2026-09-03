@@ -64,7 +64,7 @@ class StateStore:
         frontier_strategy: dict[str, Any],
         score_ceiling: float | None,
         goal: str | None = None,
-        phase: str = "configured",
+        phase: str = "ready-for-baseline",
     ) -> None:
         if self.is_initialized():
             raise RuntimeError(f"Olo is already initialized at {self.state_dir}")
@@ -129,7 +129,7 @@ class StateStore:
             "created_at": now,
         }
         discovery = {
-            "status": "exploring" if phase == "exploring" else "configured",
+            "status": "exploring" if phase == "exploring" else phase,
             "goal": goal,
             "repo_summary": None,
             "dimensions": [],
@@ -202,7 +202,7 @@ class StateStore:
             config["phase"] = (
                 "ready-to-optimize"
                 if baseline and baseline.get("status") == "committed"
-                else "configured"
+                else "ready-for-baseline"
             )
         return config
 

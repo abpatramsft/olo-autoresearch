@@ -125,16 +125,30 @@ def run_experiment(
         raise RuntimeError(
             "benchmark configuration is incomplete; finish `python olo.py explore configure` first"
         )
+    if node.get("status") == "discarded":
+        raise RuntimeError(
+            f"{exp_id} is discarded; restore the baseline with "
+            "`python olo.py baseline --prepare` or create a new experiment"
+        )
     if node.get("status") == "committed" and not check:
         raise RuntimeError(f"{exp_id} is already committed")
     attempts = int(node.get("attempts", 0))
     max_attempts = int(config.get("max_attempts", 3))
-    if not check and attempts >= max_attempts:
+    if (
+        not check
+        and node.get("kind") != "baseline"
+        and attempts >= max_attempts
+    ):
         raise RuntimeError(
             f"{exp_id} reached max_attempts={max_attempts}; discard it or create a sibling"
         )
 
-    worktree = Path(node["worktree"])
+    worktree_value = node.get("worktree")
+    if not worktree_value:
+        raise RuntimeError(
+            f"{exp_id} has no worktree; recreate it before running"
+        )
+    worktree = Path(worktree_value)
     if not worktree.exists():
         raise RuntimeError(f"experiment worktree is missing: {worktree}")
     target = worktree / str(config["target"])
@@ -288,12 +302,23 @@ def run_experiment(
             "verification": pre,
             "created_at": utc_now(),
         }
+        post = verify_experiment(
+            store,
+            exp_id,
+            phase="post",
+            persist=False,
+            outcome_override=outcome,
+        )
+        outcome["verification"] = post
+        if not post["passed"]:
+            outcome["status"] = "check-failed"
+            outcome["error"] = "post-verification failed"
         atomic_write_json(attempt_dir / "check.json", outcome)
         store.add_event(
             "experiment_check_finished",
             experiment_id=exp_id,
             check=attempt,
-            status=status,
+            status=outcome["status"],
             score=score,
         )
         return outcome
@@ -307,15 +332,10 @@ def run_experiment(
         and gates_passed
         and _is_improvement(str(config.get("metric", "max")), score, parent_score)
     )
-    commit: str | None = None
     if benchmark_error is not None:
         status = "failed"
     elif improved:
         status = "committed"
-        commit = commit_all(
-            worktree,
-            f"olo({exp_id}): {str(node.get('hypothesis') or '')[:100]}",
-        )
     else:
         status = "evaluated"
 
@@ -337,10 +357,35 @@ def run_experiment(
         "changed_files": files,
         "trace_count": trace_count,
         "duration_seconds": float(benchmark["duration_seconds"]),
-        "commit": commit,
+        "commit": None,
         "error": benchmark_error,
         "created_at": utc_now(),
     }
+    post = verify_experiment(
+        store,
+        exp_id,
+        phase="post",
+        persist=True,
+        outcome_override=outcome,
+    )
+    if not post["passed"]:
+        status = "failed"
+        improved = False
+        outcome["error"] = "post-verification failed"
+    commit: str | None = None
+    if status == "committed":
+        commit = commit_all(
+            worktree,
+            f"olo({exp_id}): {str(node.get('hypothesis') or '')[:100]}",
+        )
+    outcome.update(
+        {
+            "status": status,
+            "improved": improved,
+            "commit": commit,
+            "verification": post,
+        }
+    )
     atomic_write_json(attempt_dir / "outcome.json", outcome)
     store.update_node(
         exp_id,
@@ -351,11 +396,8 @@ def run_experiment(
         gate_results=gate_results,
         duration_seconds=float(benchmark["duration_seconds"]),
         changed_files=files,
-        error=benchmark_error,
+        error=outcome.get("error"),
     )
-    post = verify_experiment(store, exp_id, phase="post", persist=True)
-    outcome["verification"] = post
-    atomic_write_json(attempt_dir / "outcome.json", outcome)
     store.add_event(
         "experiment_finished",
         experiment_id=exp_id,
@@ -365,8 +407,9 @@ def run_experiment(
         improved=improved,
     )
     if node.get("kind") == "baseline" and status == "committed":
-        config["phase"] = "ready-to-optimize"
-        store.save_config(config)
+        latest_config = store.config()
+        latest_config["phase"] = "ready-to-optimize"
+        store.save_config(latest_config)
 
         def mark_ready(discovery: dict[str, Any]) -> None:
             discovery["status"] = "ready-to-optimize"

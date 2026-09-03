@@ -64,11 +64,26 @@ def add_local_exclude(root: Path, pattern: str = ".olo/") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = {line.strip() for line in existing.splitlines()}
-    if pattern not in lines:
+    patterns = (
+        [
+            ".olo/",
+            "__pycache__/",
+            "*.pyc",
+            ".pytest_cache/",
+            "node_modules/",
+            "dist/",
+            "build/",
+        ]
+        if pattern == ".olo/"
+        else [pattern]
+    )
+    missing = [item for item in patterns if item not in lines]
+    if missing:
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             if existing and not existing.endswith("\n"):
                 handle.write("\n")
-            handle.write(pattern + "\n")
+            for item in missing:
+                handle.write(item + "\n")
 
 
 def create_worktree(root: Path, path: Path, branch: str, commit: str) -> None:

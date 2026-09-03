@@ -27,12 +27,24 @@ def _covered(path: str, roots: list[str]) -> bool:
     return False
 
 
+def _generated_artifact(path: str) -> bool:
+    normalized = _normalized(path)
+    parts = normalized.split("/")
+    if any(
+        part in {"__pycache__", ".pytest_cache", "node_modules", "dist", "build"}
+        for part in parts
+    ):
+        return True
+    return normalized.endswith((".pyc", ".pyo"))
+
+
 def verify_experiment(
     store: StateStore,
     exp_id: str,
     *,
     phase: str,
     persist: bool = True,
+    outcome_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     graph = store.graph()
     config = store.config()
@@ -104,7 +116,7 @@ def verify_experiment(
                 }
             )
     else:
-        outcome = store.latest_outcome(exp_id)
+        outcome = outcome_override or store.latest_outcome(exp_id)
         if not outcome:
             findings.append(
                 {
@@ -116,6 +128,33 @@ def verify_experiment(
                 }
             )
         else:
+            baseline_setup = node.get("kind") == "baseline"
+            protected = list(config.get("protected_paths") or [])
+            editable = list(config.get("editable_paths") or [config.get("target")])
+            if not baseline_setup:
+                for path in outcome.get("changed_files") or []:
+                    if _generated_artifact(path):
+                        continue
+                    if _covered(path, protected):
+                        findings.append(
+                            {
+                                "severity": "block",
+                                "category": "benchmark-integrity",
+                                "what": f"run modified protected path {path}",
+                                "where": path,
+                                "fix": "discard the candidate and remove runtime mutation of measurement files",
+                            }
+                        )
+                    elif editable and not _covered(path, editable):
+                        findings.append(
+                            {
+                                "severity": "block",
+                                "category": "scope",
+                                "what": f"run produced out-of-scope change {path}",
+                                "where": path,
+                                "fix": f"limit runtime changes to: {', '.join(editable)}",
+                            }
+                        )
             if outcome.get("status") == "committed" and not outcome.get("gates_passed"):
                 findings.append(
                     {

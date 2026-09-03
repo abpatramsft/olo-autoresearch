@@ -152,6 +152,12 @@ class ExploreTests(unittest.TestCase):
                     "slug-helper",
                     "--goal",
                     "Improve slug correctness on spaces and punctuation.",
+                    "--timeout",
+                    "901",
+                    "--max-attempts",
+                    "7",
+                    "--stall-limit",
+                    "9",
                     "--no-dashboard",
                 ).stdout
             )
@@ -186,44 +192,46 @@ class ExploreTests(unittest.TestCase):
             (worktree / "benchmark.py").write_text(BENCHMARK, encoding="utf-8")
             (worktree / "gate.py").write_text(GATE, encoding="utf-8")
 
-            configured = json.loads(
-                cli(
-                    repo,
-                    "explore",
-                    "configure",
-                    "--target",
-                    "slugify.py",
-                    "--editable",
-                    "slugify.py",
-                    "--protect",
-                    "benchmark.py",
-                    "--protect",
-                    "gate.py",
-                    "--benchmark",
-                    "python benchmark.py --target {target}",
-                    "--benchmark-origin",
-                    "constructed",
-                    "--gate",
-                    "baseline-behavior::python gate.py --target {target}",
-                    "--metric",
-                    "max",
-                    "--score-ceiling",
-                    "1.0",
-                    "--unit",
-                    "slug conversion case",
-                    "--determinism",
-                    "deterministic",
-                    "--resource-profile",
-                    "CPU-light isolated process; start with width 1.",
-                    "--meaningful-improvement",
-                    "At least one additional case passing.",
-                    "--repo-summary",
-                    "Small Python helper that converts titles into URL slugs.",
-                    "--gaming-risk",
-                    "The target could special-case the three visible inputs.",
-                ).stdout
+            configure_args = (
+                "explore",
+                "configure",
+                "--target",
+                "slugify.py",
+                "--editable",
+                "slugify.py",
+                "--protect",
+                "benchmark.py",
+                "--protect",
+                "gate.py",
+                "--benchmark",
+                "python benchmark.py --target {target}",
+                "--benchmark-origin",
+                "constructed",
+                "--gate",
+                "baseline-behavior::python gate.py --target {target}",
+                "--metric",
+                "max",
+                "--score-ceiling",
+                "1.0",
+                "--unit",
+                "slug conversion case",
+                "--determinism",
+                "deterministic",
+                "--resource-profile",
+                "CPU-light isolated process; start with width 1.",
+                "--meaningful-improvement",
+                "At least one additional case passing.",
+                "--repo-summary",
+                "Small Python helper that converts titles into URL slugs.",
+                "--gaming-risk",
+                "The target could special-case the three visible inputs.",
             )
+            configured = json.loads(cli(repo, *configure_args).stdout)
             self.assertEqual(configured["phase"], "ready-for-baseline")
+            configured_state = json.loads(cli(repo, "explore", "status").stdout)
+            self.assertEqual(configured_state["config"]["timeout_seconds"], 901)
+            self.assertEqual(configured_state["config"]["max_attempts"], 7)
+            self.assertEqual(configured_state["config"]["stall_limit"], 9)
 
             checked = json.loads(cli(repo, "run", "exp_0000", "--check").stdout)
             self.assertEqual(checked["status"], "check-passed")
@@ -252,6 +260,11 @@ class ExploreTests(unittest.TestCase):
                 run(["git", "status", "--porcelain"], repo).stdout.strip(),
                 "",
             )
+            reconfigure = cli(repo, *configure_args, check=False)
+            self.assertEqual(reconfigure.returncode, 1)
+            self.assertIn("baseline is already committed", reconfigure.stderr)
+            final_status = json.loads(cli(repo, "status", "--json").stdout)
+            self.assertEqual(final_status["phase"], "ready-to-optimize")
 
 
 if __name__ == "__main__":

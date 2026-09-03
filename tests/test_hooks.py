@@ -45,6 +45,17 @@ class HookTests(unittest.TestCase):
             )
             self.assertEqual(result["permissionDecision"], "deny")
 
+    def test_exploration_blocks_all_main_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = self.make_store(Path(temp))
+            result = handle_hook(
+                store,
+                "pre-tool-use",
+                {"toolName": "edit", "toolArgs": {"path": "benchmark.py"}},
+            )
+            self.assertEqual(result["permissionDecision"], "deny")
+            self.assertIn("baseline --prepare", result["permissionDecisionReason"])
+
     def test_allows_worktree_edit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = self.make_store(Path(temp))

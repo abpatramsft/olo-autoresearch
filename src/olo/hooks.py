@@ -56,9 +56,6 @@ def _session_start(store: StateStore) -> dict[str, Any]:
 def _pre_tool_use(store: StateStore, payload: dict[str, Any]) -> dict[str, Any]:
     if not store.is_initialized():
         return {}
-    mode = store.meta().get("mode") or {}
-    if not mode.get("active"):
-        return {}
     tool = _tool_name(payload).lower()
     if tool not in {"edit", "create", "apply_patch", "write"}:
         return {}
@@ -66,9 +63,28 @@ def _pre_tool_use(store: StateStore, payload: dict[str, Any]) -> dict[str, Any]:
     if ".olo/worktrees/" in args_text:
         return {}
     config = store.config()
+    phase = config.get("phase")
+    if phase != "ready-to-optimize":
+        store.add_event("exploration_main_edit_blocked", tool=tool, phase=phase)
+        return {
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "Olo exploration keeps benchmark, gate, fixture, instrumentation, "
+                "and scorer edits off main. Run `python olo.py baseline --prepare` "
+                "and edit only the returned exp_0000 worktree."
+            ),
+        }
+    mode = store.meta().get("mode") or {}
+    if not mode.get("active"):
+        return {}
     target = str(config.get("target") or "").replace("\\", "/").lower()
     absolute = str(store.root / target).replace("\\", "/").lower()
-    if target and (target in args_text or absolute in args_text):
+    protected = [
+        str(path).replace("\\", "/").lower()
+        for path in config.get("protected_paths") or []
+    ]
+    matched_protected = any(path and path in args_text for path in protected)
+    if target and (target in args_text or absolute in args_text) or matched_protected:
         store.add_event("main_target_edit_blocked", tool=tool)
         return {
             "permissionDecision": "deny",

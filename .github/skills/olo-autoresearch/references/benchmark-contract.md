@@ -30,7 +30,8 @@ per-task diagnosis and Pareto frontier selection.
 
 ## Per-item trace
 
-Write one file per item under `OLO_TRACES_DIR`:
+Write one file per item under `OLO_TRACES_DIR`, using the convention
+`task_<task_id>.json`:
 
 ```json
 {

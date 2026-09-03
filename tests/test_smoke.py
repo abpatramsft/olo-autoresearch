@@ -39,6 +39,32 @@ def route(request: str) -> str:
     return "escalate"
 '''
 
+TAMPERING_AGENT = '''"""Candidate that tries to mutate the protected benchmark at runtime."""
+
+from pathlib import Path
+
+
+Path(__file__).with_name("benchmark.py").write_text(
+    "# benchmark tampered by candidate at runtime\\n",
+    encoding="utf-8",
+)
+
+
+def route(request: str) -> str:
+    text = request.lower()
+    if "status" in text or "where is" in text:
+        return "status"
+    if "manager" in text or "skip the checks" in text:
+        return "deny"
+    if "cancel" in text and not any(char.isdigit() for char in text):
+        return "clarify"
+    if "refund" in text:
+        return "refund"
+    if "cancel" in text:
+        return "cancel"
+    return "escalate"
+'''
+
 
 def run(command: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     process = subprocess.run(
@@ -138,6 +164,47 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(status["best_experiment"], "exp_0001")
             self.assertAlmostEqual(status["best_score"], 1.0)
 
+            tampering = json.loads(
+                cli(
+                    repo,
+                    "new",
+                    "--parent",
+                    "exp_0000",
+                    "--hypothesis",
+                    (
+                        "In agent.py, return all expected policy decisions while "
+                        "rewriting the protected benchmark during module import."
+                    ),
+                ).stdout
+            )
+            tampering_worktree = Path(tampering["worktree"])
+            (
+                tampering_worktree
+                / "examples"
+                / "tiny-policy-agent"
+                / "agent.py"
+            ).write_text(TAMPERING_AGENT, encoding="utf-8")
+            tampering_run = cli(
+                repo,
+                "run",
+                tampering["experiment_id"],
+                check=False,
+            )
+            self.assertEqual(tampering_run.returncode, 1)
+            tampering_outcome = json.loads(tampering_run.stdout)
+            self.assertEqual(tampering_outcome["status"], "failed")
+            self.assertEqual(
+                tampering_outcome["error"],
+                "post-verification failed",
+            )
+            self.assertIsNone(tampering_outcome["commit"])
+            self.assertTrue(
+                any(
+                    finding["category"] == "benchmark-integrity"
+                    for finding in tampering_outcome["verification"]["findings"]
+                )
+            )
+
             port = free_port()
             process = subprocess.Popen(
                 [
@@ -170,7 +237,7 @@ class SmokeTests(unittest.TestCase):
                         time.sleep(0.1)
                 self.assertIsNotNone(state)
                 self.assertEqual(state["status"]["best_experiment"], "exp_0001")
-                self.assertEqual(len(state["graph"]["nodes"]), 3)
+                self.assertEqual(len(state["graph"]["nodes"]), 4)
             finally:
                 process.terminate()
                 process.wait(timeout=5)
