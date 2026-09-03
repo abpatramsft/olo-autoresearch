@@ -124,6 +124,31 @@ reaches `1.0`, checks the gate, and fetches the dashboard API.
 python -m unittest discover -s tests -v
 ```
 
+To exercise the rendered dashboard in headless Chromium while it is running:
+
+```powershell
+python tests/dashboard_browser_check.py --url http://127.0.0.1:8765 --screenshot .olo/dashboard-smoke.png
+```
+
+## Verified Copilot run
+
+This prototype was exercised locally with GitHub Copilot CLI `1.0.83-3` on the
+included fixture:
+
+- Copilot discovered the `olo-autoresearch` project skill and all five `olo-*`
+  custom agent profiles.
+- `olo-orchestrator` ran one bounded round with width `1` and budget `1`.
+- Candidate work was delegated to `olo-experimenter`; `olo-verifier` ran pre
+  and post audits.
+- The baseline `exp_0000` scored `0.6`.
+- The kept branch `olo/exp_0001` scored `1.0` with all five task traces passing.
+- The policy gate passed.
+- The branch diff contains only
+  `examples/tiny-policy-agent/agent.py`; the benchmark and gate are unchanged.
+- The dashboard API and headless browser interaction both reflected the winning
+  experiment.
+- The winning branch was intentionally left unmerged.
+
 ## Use Olo in another codebase manually
 
 For this prototype, copy these paths into the root of a clean Git repository:
