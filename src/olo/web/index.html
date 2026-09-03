@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Olo Autoresearch</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="lab-header">
+      <a class="brand" href="/" aria-label="Olo dashboard home">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span>
+          <strong>OLO</strong>
+          <small>autoresearch field console</small>
+        </span>
+      </a>
+      <div class="header-meta">
+        <span id="connection" class="connection">connecting</span>
+        <span id="updated-at" class="mono">--:--:--</span>
+      </div>
+    </header>
+
+    <section class="run-strip" aria-label="Current run summary">
+      <div class="run-identity">
+        <span class="eyebrow">Active search</span>
+        <h1 id="project-name">Loading workspace</h1>
+        <p id="target-name">Reading Olo state...</p>
+      </div>
+      <div class="metric-cell">
+        <span>Best score</span>
+        <strong id="best-score">--</strong>
+        <small id="best-experiment">no baseline</small>
+      </div>
+      <div class="metric-cell">
+        <span>Search state</span>
+        <strong id="mode-status">idle</strong>
+        <small id="stall-status">stall 0 / 0</small>
+      </div>
+      <div class="metric-cell">
+        <span>Experiments</span>
+        <strong id="experiment-count">0</strong>
+        <small id="experiment-counts">none yet</small>
+      </div>
+    </section>
+
+    <main>
+      <section class="panel constellation-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">Hypothesis constellation</span>
+            <h2>Score altitude by branch</h2>
+          </div>
+          <div class="legend" aria-label="Experiment status legend">
+            <span><i class="dot committed"></i>kept</span>
+            <span><i class="dot evaluated"></i>evaluated</span>
+            <span><i class="dot failed"></i>failed</span>
+            <span><i class="dot active"></i>active</span>
+          </div>
+        </div>
+        <div class="chart-frame">
+          <svg id="experiment-chart" role="img" aria-label="Experiment score graph"></svg>
+          <div id="chart-empty" class="empty-state">
+            Run a baseline to place the first point on the field.
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel frontier-panel">
+        <div class="panel-heading compact">
+          <div>
+            <span class="eyebrow">Next launch rail</span>
+            <h2>Frontier</h2>
+          </div>
+          <span id="strategy-name" class="strategy-chip">--</span>
+        </div>
+        <div id="frontier-list" class="frontier-list"></div>
+      </aside>
+
+      <section class="panel ledger-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">Experiment tape</span>
+            <h2>Every attempt, in order</h2>
+          </div>
+          <span class="mono hint">select a row for evidence</span>
+        </div>
+        <div class="ledger-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>State</th>
+                <th>Score</th>
+                <th>Delta</th>
+                <th>Parent</th>
+                <th>Hypothesis</th>
+              </tr>
+            </thead>
+            <tbody id="experiment-ledger"></tbody>
+          </table>
+          <div id="ledger-empty" class="empty-state small">
+            No experiments recorded.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel notebook-panel">
+        <div class="notebook-column">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">Research queue</span>
+              <h2>Proposals</h2>
+            </div>
+          </div>
+          <div id="proposal-list" class="note-list"></div>
+        </div>
+        <div class="notebook-column">
+          <div class="panel-heading compact">
+            <div>
+              <span class="eyebrow">Shared memory</span>
+              <h2>Latest learnings</h2>
+            </div>
+          </div>
+          <div id="annotation-list" class="note-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="detail-dialog">
+    <div class="detail-header">
+      <div>
+        <span class="eyebrow">Evidence packet</span>
+        <h2 id="detail-title">Experiment</h2>
+      </div>
+      <button id="detail-close" type="button" aria-label="Close experiment details">Close</button>
+    </div>
+    <div id="detail-body" class="detail-body"></div>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

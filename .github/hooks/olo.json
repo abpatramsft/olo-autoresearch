@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 olo.py hook session-start",
+        "powershell": "python .\\olo.py hook session-start",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "edit|create|apply_patch",
+        "bash": "python3 olo.py hook pre-tool-use",
+        "powershell": "python .\\olo.py hook pre-tool-use",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "matcher": "bash|powershell",
+        "bash": "python3 olo.py hook post-tool-use",
+        "powershell": "python .\\olo.py hook post-tool-use",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "python3 olo.py hook agent-stop",
+        "powershell": "python .\\olo.py hook agent-stop",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "matcher": "olo-.*",
+        "bash": "python3 olo.py hook subagent-start",
+        "powershell": "python .\\olo.py hook subagent-start",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "python3 olo.py hook subagent-stop",
+        "powershell": "python .\\olo.py hook subagent-stop",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "python3 olo.py hook error-occurred",
+        "powershell": "python .\\olo.py hook error-occurred",
+        "cwd": ".",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}
