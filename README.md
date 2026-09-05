@@ -406,5 +406,6 @@ local Git worktrees and local benchmark execution. It does not yet include
 plugin marketplace installation, remote sandbox providers, pooled remote
 workers, cloud coordination, or automatic merging.
 
-See [wokring.md](wokring.md) for the complete first-principles explanation and
-[NOTICE.md](NOTICE.md) for design attribution.
+See [wokring.md](wokring.md) for the complete first-principles explanation,
+[rough.md](rough.md) for a simpler guide to optimization and Pareto-style
+frontier selection, and [NOTICE.md](NOTICE.md) for design attribution.
