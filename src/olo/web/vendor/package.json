@@ -1,0 +1,11 @@
+{
+  "name": "olo-dashboard-assets",
+  "private": true,
+  "type": "module",
+  "scripts": { "sync": "node sync-assets.mjs" },
+  "devDependencies": {
+    "dompurify": "3.4.14",
+    "lucide-static": "1.37.0",
+    "marked": "18.0.11"
+  }
+}

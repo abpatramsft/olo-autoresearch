@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .utils import generated_artifact
+
 
 def git(
     cwd: Path,
@@ -18,6 +20,8 @@ def git(
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         env=env,
     )
@@ -67,6 +71,7 @@ def add_local_exclude(root: Path, pattern: str = ".olo/") -> None:
     patterns = (
         [
             ".olo/",
+            ".olo-history/",
             "__pycache__/",
             "*.pyc",
             ".pytest_cache/",
@@ -114,7 +119,9 @@ def changed_files(worktree: Path) -> list[str]:
         value = line[3:].strip()
         if " -> " in value:
             value = value.split(" -> ", 1)[1]
-        paths.append(value.strip('"').replace("\\", "/"))
+        normalized = value.strip('"').replace("\\", "/")
+        if not generated_artifact(normalized):
+            paths.append(normalized)
     return sorted(set(paths))
 
 
@@ -144,6 +151,10 @@ def capture_diff(worktree: Path) -> str:
 
 def commit_all(worktree: Path, message: str) -> str:
     git(worktree, "add", "-A")
+    tracked = git(worktree, "ls-files", "-z").stdout.split("\0")
+    generated = [name for name in tracked if name and generated_artifact(name)]
+    if generated:
+        git(worktree, "rm", "--cached", "--ignore-unmatch", "--", *generated)
     has_changes = git(worktree, "diff", "--cached", "--quiet", check=False).returncode == 1
     if has_changes:
         git(
@@ -161,6 +172,13 @@ def commit_all(worktree: Path, message: str) -> str:
 
 def diff_between(root: Path, left: str, right: str) -> str:
     return git(root, "diff", "--binary", left, right, check=False).stdout
+
+
+def read_blob(root: Path, commit: str, path: str) -> bytes:
+    process = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=root, capture_output=True, check=False)
+    if process.returncode:
+        raise RuntimeError(f"cannot read donor file: {path}")
+    return process.stdout
 
 
 def parent_commit(graph: dict[str, Any], parent_id: str) -> str:

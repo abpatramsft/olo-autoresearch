@@ -4,6 +4,8 @@ import math
 import random
 from typing import Any
 
+from .research import eligible_nodes
+
 
 def _direction(metric: str) -> float:
     return 1.0 if metric == "max" else -1.0
@@ -17,18 +19,7 @@ def _directional_score(node: dict[str, Any], metric: str) -> float:
 
 
 def frontier_candidates(graph: dict[str, Any]) -> list[dict[str, Any]]:
-    nodes = graph.get("nodes", {})
-    candidates: list[dict[str, Any]] = []
-    for exp_id, node in nodes.items():
-        if exp_id == "root" or node.get("status") != "committed":
-            continue
-        has_committed_child = any(
-            nodes.get(child_id, {}).get("status") == "committed"
-            for child_id in node.get("children", [])
-        )
-        if not has_committed_child:
-            candidates.append(node)
-    return candidates
+    return eligible_nodes(graph)
 
 
 def _summary(node: dict[str, Any], rank: int, reason: str) -> dict[str, Any]:

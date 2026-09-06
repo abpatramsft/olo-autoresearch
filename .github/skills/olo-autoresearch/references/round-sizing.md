@@ -1,7 +1,13 @@
 # Sizing an Olo round
 
-Width is live experiment concurrency. Budget is how many concrete iterations an
-experimenter may attempt on its branch.
+Width is live experiment concurrency. Budget is the planned evaluation allowance
+per worker. Olo enforces a shared round cap of `width * budget`; the orchestrator
+must keep each worker within its assigned allowance.
+
+Every benchmark-bearing `run`, `probe`, and `run --check` consumes an evaluation.
+A probe does not consume an experiment attempt, but it is not free evaluation.
+Reserve room for the measured `run` required for independent approval. Read saved
+outcomes to summarize results; never repeat a benchmark merely to retrieve output.
 
 ## Choose width from the binding resource
 
@@ -18,13 +24,15 @@ quotas. Never increase width merely because worktrees are available.
 
 ## Choose budget from feedback quality
 
-- Budget 1: cheap, obvious independent hypotheses.
-- Budget 2-3: implementation may need one repair after trace feedback.
-- Budget 4+: expensive model or systems experiments where preserving branch
-  context is worth the extra attempts.
+- Budget 1: one measured candidate, no exploratory probe.
+- Budget 2: one recorded probe followed by one measured candidate.
+- Budget 3: room for another recorded probe or a repaired failed execution.
+- Budget 4+: use only when the expected information justifies the extra
+  evaluations and the total study cap permits them.
 
 Use a lower budget when failures are deterministic and a sibling direction is
-more valuable than another retry.
+more valuable than another retry. Setup/preflight blocks do not consume an
+evaluation. Never increase or reset the budget to hide accidental duplicate runs.
 
 ## Noisy benchmarks
 

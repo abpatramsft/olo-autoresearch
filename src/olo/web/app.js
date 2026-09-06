@@ -1,3 +1,6 @@
+import { marked } from "/vendor/marked.esm.js";
+import DOMPurify from "/vendor/purify.es.mjs";
+
 const ui = {
   connection: document.querySelector("#connection"),
   updatedAt: document.querySelector("#updated-at"),
@@ -21,9 +24,24 @@ const ui = {
   detailTitle: document.querySelector("#detail-title"),
   detailBody: document.querySelector("#detail-body"),
   detailClose: document.querySelector("#detail-close"),
+  version: document.querySelector("#evaluation-version"),
+  direction: document.querySelector("#metric-direction"),
+  search: document.querySelector("#experiment-search"),
+  filter: document.querySelector("#status-filter"),
+  summary: document.querySelector("#summary-dialog"),
+  summaryOpen: document.querySelector("#summary-open"),
+  summaryClose: document.querySelector("#summary-close"),
+  summaryContent: document.querySelector("#summary-content"),
+  summaryState: document.querySelector("#summary-state"),
 };
 
 let latestState = null;
+let stateSignature = "";
+let selectedExperiment = null;
+
+function stateLabel(value) {
+  return ({ committed: "approved", "pending-review": "awaiting review", retained: "retained", invalid: "invalidated" })[value] || String(value || "pending").replaceAll("-", " ");
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -44,7 +62,7 @@ function formatScore(value) {
 function formatCounts(counts) {
   const entries = Object.entries(counts || {});
   return entries.length
-    ? entries.map(([key, value]) => `${value} ${key}`).join(" / ")
+    ? entries.map(([key, value]) => `${value} ${stateLabel(key)}`).join(" / ")
     : "none yet";
 }
 
@@ -78,11 +96,13 @@ function renderSummary(data) {
   ui.bestScore.textContent = formatScore(status.best_score);
   ui.bestExperiment.textContent = status.best_experiment || "no baseline";
   ui.modeStatus.textContent =
-    mode.status && mode.status !== "idle" ? mode.status : status.phase || "idle";
+    stateLabel(mode.status && mode.status !== "idle" ? mode.status : status.phase || "idle");
   ui.stallStatus.textContent =
     `stall ${mode.stall_count || 0} / ${mode.stall_limit || 0}`;
   ui.experimentCount.textContent = String(status.experiments || 0);
   ui.experimentCounts.textContent = formatCounts(status.counts);
+  ui.version.textContent = `Evaluation ${data.config.evaluation_version || "legacy"}`;
+  ui.direction.textContent = data.config.metric === "min" ? "Lower scores are better" : "Higher scores are better";
 }
 
 function svgElement(name, attrs = {}) {
@@ -102,12 +122,14 @@ function renderChart(data) {
   ui.chartEmpty.hidden = nodes.length > 0;
   if (!nodes.length) return;
 
-  const width = Math.max(ui.chart.clientWidth || 800, 500);
-  const height = Math.max(ui.chart.clientHeight || 410, 330);
+  const width = Math.max(ui.chart.parentElement.clientWidth, nodes.length * 58 + 120);
+  const height = 310;
   const margin = { top: 38, right: 40, bottom: 52, left: 58 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   ui.chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  ui.chart.setAttribute("width", width);
+  ui.chart.setAttribute("height", height);
 
   const scores = nodes.map((node) => Number(node.score));
   let min = Math.min(...scores);
@@ -123,8 +145,7 @@ function renderChart(data) {
 
   const x = (index) =>
     margin.left + (nodes.length === 1 ? plotWidth / 2 : index * plotWidth / (nodes.length - 1));
-  const y = (score) =>
-    margin.top + (max - Number(score)) * plotHeight / (max - min);
+  const y = (score) => margin.top + (data.config.metric === "min" ? Number(score) - min : max - Number(score)) * plotHeight / (max - min);
 
   for (let tick = 0; tick <= 4; tick += 1) {
     const score = min + (max - min) * tick / 4;
@@ -167,6 +188,14 @@ function renderChart(data) {
   });
 
   nodes.forEach((node) => {
+    for (const donor of node.donors || []) {
+      const source = pointById[donor];
+      const destination = pointById[node.id];
+      if (source) ui.chart.append(svgElement("line", { x1: source.x, y1: source.y, x2: destination.x, y2: destination.y, class: "donor-line" }));
+    }
+  });
+
+  nodes.forEach((node) => {
     const point = pointById[node.id];
     const group = svgElement("g", {
       class: `experiment-node ${node.status || "pending"} ${node.id === data.status.best_experiment ? "best" : ""}`,
@@ -175,6 +204,9 @@ function renderChart(data) {
       "aria-label": `${node.id}, score ${formatScore(node.score)}, ${node.status}`,
     });
     group.append(svgElement("circle", { cx: point.x, cy: point.y, r: 8 }));
+    const tooltip = svgElement("title");
+    tooltip.textContent = `${node.id}: ${stateLabel(node.status)}. ${node.hypothesis}`;
+    group.append(tooltip);
     const label = svgElement("text", {
       x: point.x,
       y: point.y - 15,
@@ -199,24 +231,25 @@ function renderFrontier(data) {
   ui.frontierList.innerHTML = "";
   if (!frontier.picks?.length) {
     ui.frontierList.innerHTML =
-      '<div class="empty-state small">Keep a valid baseline to open the frontier.</div>';
+      '<div class="empty-state small">No approved parents.</div>';
     return;
   }
   for (const item of frontier.picks) {
     const card = document.createElement("article");
     card.className = "frontier-card";
     card.tabIndex = 0;
+    card.setAttribute("role", "button");
     card.innerHTML = `
       <span class="frontier-rank">${escapeHtml(item.rank)}</span>
       <div>
         <strong>${escapeHtml(item.id)} / ${escapeHtml(formatScore(item.score))}</strong>
         <p>${escapeHtml(item.hypothesis)}</p>
-        <small>${escapeHtml(item.reason)}</small>
+        <small>${escapeHtml(stateLabel(data.graph.nodes[item.id]?.status))} / ${escapeHtml(item.reason)}</small>
       </div>
     `;
     card.addEventListener("click", () => openDetail(item.id));
     card.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") openDetail(item.id);
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openDetail(item.id); }
     });
     ui.frontierList.append(card);
   }
@@ -224,27 +257,27 @@ function renderFrontier(data) {
 
 function renderLedger(data) {
   const nodesById = data.graph.nodes || {};
+  const query = ui.search.value.trim().toLowerCase();
   const nodes = Object.values(nodesById)
     .filter((node) => node.id !== "root")
+    .filter((node) => !ui.filter.value || node.status === ui.filter.value)
+    .filter((node) => /^exp_\d+$/.test(query) ? node.id === query : `${node.id} ${node.hypothesis} ${node.parent} ${(node.donors || []).join(" ")}`.toLowerCase().includes(query))
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
   ui.ledger.replaceChildren();
   ui.ledgerEmpty.hidden = nodes.length > 0;
   for (const node of nodes) {
     const delta = scoreDelta(node, nodesById);
     const row = document.createElement("tr");
-    row.tabIndex = 0;
     row.innerHTML = `
-      <td class="mono-cell">${escapeHtml(node.id)}</td>
-      <td><span class="status-tag ${escapeHtml(node.status)}">${escapeHtml(node.status)}</span></td>
+      <td class="mono-cell"><button class="row-link" type="button" aria-label="View ${escapeHtml(node.id)}">${escapeHtml(node.id)}</button></td>
+      <td><span class="status-tag ${escapeHtml(node.status)}">${escapeHtml(stateLabel(node.status))}</span></td>
       <td class="mono-cell">${escapeHtml(formatScore(node.score))}</td>
       <td class="mono-cell ${deltaClass(delta, data.status.metric)}">${delta == null ? "--" : `${delta >= 0 ? "+" : ""}${delta.toFixed(4)}`}</td>
-      <td class="mono-cell">${escapeHtml(node.parent)}</td>
-      <td>${escapeHtml(node.hypothesis)}</td>
+      <td class="mono-cell">${escapeHtml(node.parent)}${node.donors?.length ? `<small>donors: ${escapeHtml(node.donors.join(", "))}</small>` : ""}</td>
+      <td class="mono-cell evidence-count">${node.attempts || 0} eval / ${node.probe_count || 0} probe${node.preflight_count ? `<small>${node.preflight_count} blocked</small>` : ""}</td>
+      <td class="hypothesis-cell"><span class="hypothesis-preview">${escapeHtml(node.hypothesis)}</span></td>
     `;
     row.addEventListener("click", () => openDetail(node.id));
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") openDetail(node.id);
-    });
     ui.ledger.append(row);
   }
 }
@@ -256,20 +289,20 @@ function renderNotes(container, values, kind) {
       `<div class="empty-state small">No ${kind} recorded yet.</div>`;
     return;
   }
-  for (const item of values.slice().reverse().slice(0, 8)) {
+  for (const item of (kind === "proposals" ? values.slice().reverse() : values).slice(0, 8)) {
     const card = document.createElement("article");
     card.className = "note-card";
     if (kind === "proposals") {
       card.innerHTML = `
         <strong>${escapeHtml(item.title)}</strong>
         <p>${escapeHtml(item.hypothesis)}</p>
-        <small>${escapeHtml(item.source)} / confidence ${escapeHtml(item.confidence)}</small>
+        <small>${escapeHtml(item.status || "proposed")} / ${escapeHtml(item.source)} / confidence ${escapeHtml(item.confidence)}</small>
       `;
     } else {
       card.innerHTML = `
         <strong>${escapeHtml(item.experiment_id || "workspace")}</strong>
         <p>${escapeHtml(item.text)}</p>
-        <small>${escapeHtml(item.type || "note")}${item.task_id ? ` / task ${escapeHtml(item.task_id)}` : ""}</small>
+        <small>${escapeHtml(item.payload?.kind || item.type || "note")}${item.task_id ? ` / task ${escapeHtml(item.task_id)}` : ""}${item.payload?.tags?.length ? ` / ${escapeHtml(item.payload.tags.join(", "))}` : ""}</small>
       `;
     }
     container.append(card);
@@ -277,6 +310,7 @@ function renderNotes(container, values, kind) {
 }
 
 async function openDetail(expId) {
+  selectedExperiment = expId;
   ui.detailTitle.textContent = expId;
   ui.detailBody.innerHTML = '<div class="empty-state small">Loading evidence...</div>';
   if (!ui.dialog.open) ui.dialog.showModal();
@@ -284,29 +318,48 @@ async function openDetail(expId) {
     const response = await fetch(`/api/experiment/${encodeURIComponent(expId)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const detail = await response.json();
+    if (selectedExperiment !== expId || !ui.dialog.open) return;
     const node = detail.node;
     const outcome = detail.outcome || {};
     const gates = (outcome.gate_results || [])
       .map((gate) => `${gate.name}: ${gate.passed ? "pass" : "fail"}`)
       .join(", ") || "none";
     const annotations = (detail.annotations || [])
+      .filter((item) => item.type !== "verification")
       .map((item) => `<li>${escapeHtml(item.text)}</li>`)
       .join("") || "<li>No annotations.</li>";
+    const changes = outcome.task_changes || {};
+    const deltas = Object.entries(changes.deltas || {}).map(([task, delta]) => `<tr><td>${escapeHtml(task)}</td><td class="${delta > 0 ? "delta-up" : delta < 0 ? "delta-down" : ""}">${delta > 0 ? "+" : ""}${formatScore(delta)}</td></tr>`).join("");
+    const sources = Object.entries(outcome.source_comparison || {}).map(([source, comparison]) => `<li>${escapeHtml(source)}: gain ${escapeHtml(formatScore(comparison.gain))}; ${comparison.task_changes?.improved?.length || 0} improved, ${comparison.task_changes?.regressed?.length || 0} regressed tasks.</li>`).join("");
+    const records = (detail.records || []).map((record) => `<details><summary>${escapeHtml(record.kind)} / ${escapeHtml(record.status)} / ${escapeHtml(formatScore(record.score))}</summary><ul class="artifact-list">${record.artifacts.map((path) => `<li><a href="/api/artifact/${path.split("/").map(encodeURIComponent).join("/")}" target="_blank" rel="noopener">${escapeHtml(path)}</a></li>`).join("")}</ul></details>`).join("");
+    const findings = (outcome.verification?.findings || []).map((finding) => `<li><strong>${escapeHtml(finding.severity)}</strong>: ${escapeHtml(finding.what)} (${escapeHtml(finding.where)})</li>`).join("");
     ui.detailBody.innerHTML = `
       <div class="detail-grid">
-        <div class="detail-stat"><span>Status</span><strong>${escapeHtml(node.status)}</strong></div>
-        <div class="detail-stat"><span>Score</span><strong>${escapeHtml(formatScore(node.score))}</strong></div>
+        <div class="detail-stat"><span>Status</span><strong>${escapeHtml(stateLabel(node.status))}</strong></div>
+        <div class="detail-stat"><span>Latest measured score</span><strong>${escapeHtml(formatScore(outcome.score ?? node.score))}</strong></div>
         <div class="detail-stat"><span>Parent</span><strong>${escapeHtml(node.parent)}</strong></div>
-        <div class="detail-stat"><span>Gates</span><strong>${escapeHtml(gates)}</strong></div>
+        <div class="detail-stat"><span>Version</span><strong>${escapeHtml(outcome.evaluation_version || node.evaluation_version || "legacy")}</strong></div>
       </div>
       <section class="detail-section">
         <h3>Hypothesis</h3>
         <p>${escapeHtml(node.hypothesis)}</p>
       </section>
       <section class="detail-section">
-        <h3>Verification and learnings</h3>
+        <h3>Review and gates</h3>
+        <p>${escapeHtml(node.review ? `${node.review.reviewer}: ${node.review.reason}` : "No binding review recorded.")}</p>
+        <p>${escapeHtml(gates)}</p><ul>${findings}</ul>
+      </section>
+      <section class="detail-section">
+        <h3>Per-task changes</h3>
+        <p>${(changes.improved || []).length} improved / ${(changes.regressed || []).length} regressed / ${(changes.missing || []).length} missing</p>
+        ${deltas ? `<table class="task-table"><thead><tr><th>Task</th><th>Directional gain</th></tr></thead><tbody>${deltas}</tbody></table>` : ""}
+        ${sources ? `<h3>Source comparisons</h3><ul>${sources}</ul>` : ""}
+      </section>
+      <section class="detail-section">
+        <h3>Research notes</h3>
         <ul>${annotations}</ul>
       </section>
+      <section class="detail-section"><h3>Evidence files</h3>${records || "No saved records."}</section>
       <section class="detail-section">
         <h3>Recorded diff</h3>
         <pre>${escapeHtml(detail.diff || "No diff recorded.")}</pre>
@@ -326,20 +379,51 @@ async function refresh() {
   try {
     const response = await fetch("/api/state", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    latestState = await response.json();
-    renderSummary(latestState);
-    renderChart(latestState);
-    renderFrontier(latestState);
-    renderLedger(latestState);
-    renderNotes(ui.proposalList, latestState.proposals || [], "proposals");
-    renderNotes(ui.annotationList, latestState.annotations || [], "learnings");
+    const data = await response.json();
+    const signature = JSON.stringify(data);
+    if (signature !== stateSignature) {
+      stateSignature = signature;
+      latestState = data;
+      renderSummary(data);
+      renderChart(data);
+      renderFrontier(data);
+      renderLedger(data);
+      renderNotes(ui.proposalList, data.proposals || [], "proposals");
+      renderNotes(ui.annotationList, data.learnings || [], "learnings");
+    }
     ui.connection.textContent = "live";
     ui.connection.classList.add("live");
     ui.updatedAt.textContent = new Date().toLocaleTimeString();
   } catch (error) {
     ui.connection.textContent = "offline";
     ui.connection.classList.remove("live");
-    console.error(error);
+    ui.connection.title = error.message;
+  } finally {
+    setTimeout(refresh, 3000);
+  }
+}
+
+async function openSummary() {
+  ui.summaryContent.textContent = "Loading summary...";
+  if (!ui.summary.open) ui.summary.showModal();
+  try {
+    const response = await fetch("/api/report", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const report = await response.json();
+    ui.summaryState.textContent = stateLabel(report.phase || "Research report");
+    const content = DOMPurify.sanitize(marked.parse(report.markdown), {
+      RETURN_DOM_FRAGMENT: true, FORBID_TAGS: ["img", "style", "iframe", "form"], FORBID_ATTR: ["style"],
+    });
+    ui.summaryContent.replaceChildren(content);
+    for (const link of ui.summaryContent.querySelectorAll("a")) {
+      const path = link.getAttribute("href") || "";
+      if (path.startsWith("experiments/") || path.startsWith("final-test/")) link.href = `/api/artifact/${path.split("/").map(encodeURIComponent).join("/")}`;
+      else if (path === "measurement.json") link.href = "/api/measurement";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+  } catch (error) {
+    ui.summaryContent.textContent = `Could not load summary: ${error.message}`;
   }
 }
 
@@ -347,9 +431,13 @@ ui.detailClose.addEventListener("click", () => ui.dialog.close());
 ui.dialog.addEventListener("click", (event) => {
   if (event.target === ui.dialog) ui.dialog.close();
 });
+ui.summaryOpen.addEventListener("click", openSummary);
+ui.summaryClose.addEventListener("click", () => ui.summary.close());
+ui.summary.addEventListener("click", (event) => { if (event.target === ui.summary) ui.summary.close(); });
+ui.search.addEventListener("input", () => { if (latestState) renderLedger(latestState); });
+ui.filter.addEventListener("change", () => { if (latestState) renderLedger(latestState); });
 window.addEventListener("resize", () => {
   if (latestState) renderChart(latestState);
 });
 
 refresh();
-setInterval(refresh, 2000);

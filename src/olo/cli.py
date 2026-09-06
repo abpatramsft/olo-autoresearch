@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import subprocess
@@ -61,6 +62,22 @@ def _parse_gate(raw: str, index: int) -> dict[str, str]:
         name, command = raw.split("::", 1)
         return {"name": name.strip() or f"gate-{index}", "command": command.strip()}
     return {"name": f"gate-{index}", "command": raw.strip()}
+
+
+def _policy_settings(args: argparse.Namespace) -> dict[str, Any]:
+    settings = {}
+    for name in ("min_improvement", "min_relative_improvement", "max_task_regression", "max_evaluations", "evaluation_version", "final_test", "critical_tasks"):
+        value = getattr(args, name, None)
+        if value is None:
+            continue
+        if name in {"min_improvement", "min_relative_improvement", "max_task_regression"} and (not math.isfinite(value) or value < 0):
+            raise ValueError(f"{name} must be finite and nonnegative")
+        if name == "max_evaluations" and value < 1:
+            raise ValueError("max_evaluations must be positive")
+        settings[name] = value
+    if getattr(args, "score_ceiling", None) is not None and not math.isfinite(args.score_ceiling):
+        raise ValueError("score_ceiling must be finite")
+    return settings
 
 
 def _entry_command(root: Path) -> list[str]:
@@ -164,10 +181,13 @@ def _allocate(
     hypothesis: str,
     *,
     kind: str = "experiment",
+    donors: list[str] | None = None,
+    contributions: dict[str, str] | None = None,
+    proposal_id: str | None = None,
 ) -> dict[str, Any]:
     graph = store.graph()
     commit = parent_commit(graph, parent_id)
-    node = store.reserve_experiment(parent_id, hypothesis, kind=kind)
+    node = store.reserve_experiment(parent_id, hypothesis, kind=kind, donors=donors, contributions=contributions, proposal_id=proposal_id)
     try:
         create_worktree(
             store.root,
@@ -184,6 +204,7 @@ def _allocate(
         parent=parent_id,
         hypothesis=hypothesis,
     )
+    atomic_write_json(store.experiment_dir(node["id"]) / "allocation.json", node)
     return node
 
 
@@ -299,7 +320,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
         raise RuntimeError(f"unknown explore command: {args.explore_command}")
 
     baseline = _baseline_node(store)
-    if baseline and baseline.get("status") == "committed":
+    if baseline and baseline.get("status") in {"committed", "pending-review", "retained", "invalid"}:
         raise RuntimeError(
             "the baseline is already committed; start a new Olo workspace before "
             "changing the measurement system"
@@ -346,6 +367,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
             "meaningful_improvement": args.meaningful_improvement,
         }
     )
+    config.update(_policy_settings(args))
     if args.timeout is not None:
         config["timeout_seconds"] = args.timeout
     if args.max_attempts is not None:
@@ -467,6 +489,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
 
 
 def cmd_init(args: argparse.Namespace, root: Path) -> int:
+    policy = _policy_settings(args)
     ensure_repo_ready(root)
     if not args.allow_dirty:
         ensure_clean(root)
@@ -499,6 +522,9 @@ def cmd_init(args: argparse.Namespace, root: Path) -> int:
         frontier_strategy=strategy,
         score_ceiling=args.score_ceiling,
     )
+    config = store.config()
+    config.update(policy)
+    store.save_config(config)
     result: dict[str, Any] = {
         "initialized": True,
         "state_dir": str(store.state_dir),
@@ -513,9 +539,9 @@ def cmd_init(args: argparse.Namespace, root: Path) -> int:
 
 
 def cmd_baseline(args: argparse.Namespace, store: StateStore) -> int:
-    ensure_clean(store.root)
     node = _baseline_node(store)
     if node is None:
+        ensure_clean(store.root)
         if int(store.meta().get("next_id", 0)) != 0:
             raise RuntimeError("baseline must be the first Olo experiment")
         node = _allocate(
@@ -548,7 +574,7 @@ def cmd_baseline(args: argparse.Namespace, store: StateStore) -> int:
         )
     outcome = run_experiment(store, node["id"], timeout_override=args.timeout)
     _json(outcome)
-    return 0 if outcome["status"] == "committed" else 1
+    return 0 if outcome["status"] in {"committed", "pending-review"} else 1
 
 
 def cmd_new(args: argparse.Namespace, store: StateStore) -> int:
@@ -556,7 +582,7 @@ def cmd_new(args: argparse.Namespace, store: StateStore) -> int:
         raise RuntimeError(
             "Olo is not ready to optimize; complete exploration and commit the baseline first"
         )
-    node = _allocate(store, args.parent, args.hypothesis)
+    node = _allocate(store, args.parent, args.hypothesis, proposal_id=args.proposal)
     _json(
         {
             "experiment_id": node["id"],
@@ -569,25 +595,86 @@ def cmd_new(args: argparse.Namespace, store: StateStore) -> int:
     return 0
 
 
+def cmd_recombine(args: argparse.Namespace, store: StateStore) -> int:
+    from .gitops import read_blob
+    from .research import eligible_nodes
+    from .verification import _covered
+
+    config = store.config()
+    if config.get("phase") != "ready-to-optimize":
+        raise RuntimeError("approve the baseline before recombining experiments")
+    approved = {node["id"]: node for node in eligible_nodes(store.graph())}
+    if args.base not in approved or any(donor not in approved for donor in args.donor):
+        raise RuntimeError("base and donors must be approved")
+    contributions = {}
+    for raw in args.contribution:
+        donor_id, separator, description = raw.partition("::")
+        if not separator or donor_id not in args.donor or not description.strip():
+            raise ValueError("contributions must have the form DONOR::description")
+        contributions[donor_id] = description.strip()
+    transfers: dict[str, bytes] = {}
+    for raw in args.take or []:
+        donor_id, separator, raw_path = raw.partition(":")
+        if not separator or donor_id not in args.donor:
+            raise ValueError("file transfers must have the form DONOR:relative/path")
+        path = _normalize_relative(store.root, raw_path)
+        if _covered(path, config.get("protected_paths") or []) or not _covered(path, config.get("editable_paths") or []):
+            raise RuntimeError(f"transfer is outside editable scope: {path}")
+        if path in transfers:
+            raise ValueError(f"multiple donors requested for the same path: {path}")
+        transfers[path] = read_blob(store.root, approved[donor_id]["commit"], path)
+    node = _allocate(store, args.base, args.hypothesis, donors=args.donor, contributions=contributions, proposal_id=args.proposal)
+    for path, content in transfers.items():
+        destination = Path(node["worktree"]) / path
+        if not destination.resolve().is_relative_to(Path(node["worktree"]).resolve()):
+            raise RuntimeError(f"transfer resolves outside candidate worktree: {path}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _json({**node, "experiment_id": node["id"], "transferred_files": sorted(transfers)})
+    return 0
+
+
 def cmd_run(args: argparse.Namespace, store: StateStore) -> int:
     outcome = run_experiment(
         store,
         args.experiment_id,
         timeout_override=args.timeout,
         check=args.check,
+        probe=args.command == "probe",
     )
     _json(outcome)
-    accepted = {"committed", "evaluated", "check-passed"}
+    accepted = {"committed", "evaluated", "check-passed", "pending-review", "probed"}
     return 0 if outcome["status"] in accepted else 1
 
 
+def cmd_review(args: argparse.Namespace, store: StateStore) -> int:
+    from .research import review_experiment
+
+    _json(review_experiment(store, args.experiment_id, verdict=args.verdict, reviewer=args.reviewer, reason=args.reason))
+    return 0
+
+
 def cmd_discard(args: argparse.Namespace, store: StateStore) -> int:
+    from .gitops import capture_diff
+
     graph = store.graph()
     node = graph.get("nodes", {}).get(args.experiment_id)
     if node is None:
         raise RuntimeError(f"unknown experiment: {args.experiment_id}")
-    if node.get("status") == "committed" and not args.force:
-        raise RuntimeError("refusing to discard a committed node without --force")
+    if node.get("status") in {"committed", "retained"} and not args.force:
+        raise RuntimeError("refusing to discard an approved node without --force")
+    if not node.get("worktree"):
+        raise RuntimeError("experiment has no worktree to discard")
+    directory = store.experiment_dir(args.experiment_id) / "discard"
+    directory.mkdir(parents=True, exist_ok=True)
+    worktree = Path(node["worktree"])
+    if worktree.exists():
+        (directory / "diff.patch").write_text(capture_diff(worktree), encoding="utf-8")
+    atomic_write_json(directory / "outcome.json", {
+        "experiment_id": args.experiment_id, "status": "discarded", "reason": args.reason,
+        "artifact_dir": str(directory.relative_to(store.state_dir)), "created_at": utc_now(),
+        "latest_evidence": node.get("latest_record"), "score": node.get("score"),
+    })
     remove_worktree(
         store.root,
         Path(node["worktree"]),
@@ -649,8 +736,13 @@ def cmd_tree(store: StateStore) -> int:
     return 0
 
 
-def cmd_scratchpad(store: StateStore) -> int:
-    print(store.scratchpad(), end="")
+def cmd_scratchpad(store: StateStore, args: argparse.Namespace) -> int:
+    print(store.scratchpad(query=args.query, parent=args.parent, limit=args.limit), end="")
+    return 0
+
+
+def cmd_learn(args: argparse.Namespace, store: StateStore) -> int:
+    _json(store.add_learning(args.experiment_id, text=args.text, tags=args.tag or [], supersedes=args.supersedes or [], kind=args.kind))
     return 0
 
 
@@ -679,17 +771,20 @@ def cmd_diff(args: argparse.Namespace, store: StateStore) -> int:
     outcome = store.latest_outcome(args.experiment_id)
     if not outcome:
         return 0
-    path = store.attempt_dir(args.experiment_id, int(outcome["attempt"])) / "diff.patch"
+    path = store.state_dir / (outcome.get("artifact_dir") or f"experiments/{args.experiment_id}/attempts/{int(outcome['attempt']):03d}") / "diff.patch"
+    discarded = store.experiment_dir(args.experiment_id) / "discard/diff.patch"
+    if discarded.exists():
+        path = discarded
     if path.exists():
         print(path.read_text(encoding="utf-8"), end="")
     return 0
 
 
 def cmd_traces(args: argparse.Namespace, store: StateStore) -> int:
-    node = store.graph().get("nodes", {}).get(args.experiment_id)
-    if not node or not node.get("attempts"):
+    outcome = store.latest_outcome(args.experiment_id)
+    if not outcome:
         raise RuntimeError(f"no traces for {args.experiment_id}")
-    traces = store.traces_dir(args.experiment_id, int(node["attempts"]))
+    traces = store.state_dir / (outcome.get("artifact_dir") or f"experiments/{args.experiment_id}/attempts/{int(outcome['attempt']):03d}") / "traces"
     if args.task_id is None:
         _json({"files": [str(path) for path in sorted(traces.glob("*.json"))]})
         return 0
@@ -726,6 +821,9 @@ def cmd_annotate(args: argparse.Namespace, store: StateStore) -> int:
 def cmd_proposal(args: argparse.Namespace, store: StateStore) -> int:
     if args.proposal_command == "list":
         _json({"proposals": store.proposals()})
+        return 0
+    if args.proposal_command == "update":
+        _json(store.update_proposal(args.proposal_id, status=args.status, experiment_id=args.experiment))
         return 0
     entry = store.add_proposal(
         source=args.source,
@@ -839,7 +937,9 @@ def _build_report(store: StateStore) -> str:
 
 
 def cmd_report(args: argparse.Namespace, store: StateStore) -> int:
-    report = _build_report(store)
+    from .reporting import save_report
+
+    report = save_report(store)
     if args.output:
         path = Path(args.output)
         if not path.is_absolute():
@@ -849,6 +949,14 @@ def cmd_report(args: argparse.Namespace, store: StateStore) -> int:
     else:
         print(report, end="")
     return 0
+
+
+def cmd_finalize(args: argparse.Namespace, store: StateStore) -> int:
+    from .measurement import finalize
+
+    outcome = finalize(store, args.experiment)
+    _json(outcome)
+    return 0 if outcome["status"] == "completed" else 1
 
 
 def cmd_doctor(store: StateStore) -> int:
@@ -1003,6 +1111,22 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--no-dashboard", action="store_true")
     init.add_argument("--port", type=int, default=8765)
 
+    for policy_parser in (init, configure):
+        policy_parser.add_argument("--evaluation-version")
+        policy_parser.add_argument("--min-improvement", type=float)
+        policy_parser.add_argument("--min-relative-improvement", type=float)
+        policy_parser.add_argument("--critical-task", dest="critical_tasks", action="append")
+        policy_parser.add_argument("--max-task-regression", type=float)
+        policy_parser.add_argument("--max-evaluations", type=int)
+        policy_parser.add_argument("--final-test")
+
+    evaluation = sub.add_parser("evaluation")
+    evaluation_sub = evaluation.add_subparsers(dest="evaluation_command", required=True)
+    evaluation_new = evaluation_sub.add_parser("new")
+    evaluation_new.add_argument("--version", required=True)
+    evaluation_new.add_argument("--from", dest="source", default="root")
+    evaluation_new.add_argument("--goal")
+
     baseline = sub.add_parser("baseline")
     baseline.add_argument("--hypothesis")
     baseline.add_argument("--timeout", type=int)
@@ -1011,11 +1135,36 @@ def build_parser() -> argparse.ArgumentParser:
     new = sub.add_parser("new")
     new.add_argument("--parent", required=True)
     new.add_argument("--hypothesis", required=True)
+    new.add_argument("--proposal")
+
+    recombine = sub.add_parser("recombine")
+    recombine.add_argument("--base", required=True)
+    recombine.add_argument("--donor", action="append", required=True)
+    recombine.add_argument("--contribution", action="append", required=True)
+    recombine.add_argument("--take", action="append")
+    recombine.add_argument("--hypothesis", required=True)
+    recombine.add_argument("--proposal")
 
     run = sub.add_parser("run")
     run.add_argument("experiment_id")
     run.add_argument("--timeout", type=int)
     run.add_argument("--check", action="store_true")
+
+    probe = sub.add_parser("probe")
+    probe.add_argument("experiment_id")
+    probe.add_argument("--timeout", type=int)
+    probe.set_defaults(check=False)
+
+    review = sub.add_parser("review")
+    review.add_argument("experiment_id")
+    review.add_argument("--verdict", choices=["approve", "reject"], required=True)
+    review.add_argument("--reviewer", required=True)
+    review.add_argument("--reason", required=True)
+
+    invalidate = sub.add_parser("invalidate")
+    invalidate.add_argument("experiment_id")
+    invalidate.add_argument("--reviewer", required=True)
+    invalidate.add_argument("--reason", required=True)
 
     discard = sub.add_parser("discard")
     discard.add_argument("experiment_id")
@@ -1033,7 +1182,17 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show")
     show.add_argument("experiment_id")
     sub.add_parser("tree")
-    sub.add_parser("scratchpad")
+    scratchpad = sub.add_parser("scratchpad")
+    scratchpad.add_argument("--query", default="")
+    scratchpad.add_argument("--parent")
+    scratchpad.add_argument("--limit", type=int, default=12)
+
+    learn = sub.add_parser("learn")
+    learn.add_argument("experiment_id")
+    learn.add_argument("--text", required=True)
+    learn.add_argument("--tag", action="append")
+    learn.add_argument("--supersedes", action="append")
+    learn.add_argument("--kind", choices=["hypothesis", "observation"], default="hypothesis")
 
     frontier = sub.add_parser("frontier")
     frontier.add_argument("--limit", type=int)
@@ -1063,6 +1222,10 @@ def build_parser() -> argparse.ArgumentParser:
     proposal = sub.add_parser("proposal")
     proposal_sub = proposal.add_subparsers(dest="proposal_command", required=True)
     proposal_sub.add_parser("list")
+    proposal_update = proposal_sub.add_parser("update")
+    proposal_update.add_argument("proposal_id")
+    proposal_update.add_argument("--status", choices=["proposed", "claimed", "tested", "rejected", "superseded"], required=True)
+    proposal_update.add_argument("--experiment")
     proposal_add = proposal_sub.add_parser("add")
     proposal_add.add_argument("--source", required=True)
     proposal_add.add_argument("--title", required=True)
@@ -1107,6 +1270,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser("report")
     report.add_argument("--output")
+    finalize = sub.add_parser("finalize")
+    finalize.add_argument("--experiment")
     sub.add_parser("doctor")
 
     hook = sub.add_parser("hook", help=argparse.SUPPRESS)
@@ -1151,16 +1316,30 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "explore" and args.explore_command == "init":
             return cmd_explore_init(args, root)
         store.require_initialized()
+        if args.command == "evaluation":
+            from .measurement import new_evaluation
+
+            _json(new_evaluation(store, version=args.version, source=args.source, goal=args.goal))
+            return 0
+        if args.command == "invalidate":
+            from .research import invalidate_experiment
+
+            _json(invalidate_experiment(store, args.experiment_id, reviewer=args.reviewer, reason=args.reason))
+            return 0
         commands = {
             "explore": lambda: cmd_explore(args, store),
             "baseline": lambda: cmd_baseline(args, store),
             "new": lambda: cmd_new(args, store),
+            "recombine": lambda: cmd_recombine(args, store),
             "run": lambda: cmd_run(args, store),
+            "probe": lambda: cmd_run(args, store),
+            "review": lambda: cmd_review(args, store),
             "discard": lambda: cmd_discard(args, store),
             "status": lambda: cmd_status(args, store),
             "show": lambda: cmd_show(args, store),
             "tree": lambda: cmd_tree(store),
-            "scratchpad": lambda: cmd_scratchpad(store),
+            "scratchpad": lambda: cmd_scratchpad(store, args),
+            "learn": lambda: cmd_learn(args, store),
             "frontier": lambda: cmd_frontier(args, store),
             "diff": lambda: cmd_diff(args, store),
             "traces": lambda: cmd_traces(args, store),
@@ -1172,9 +1351,10 @@ def main(argv: list[str] | None = None) -> int:
             "round": lambda: cmd_round(args, store),
             "dashboard": lambda: cmd_dashboard(args, store),
             "report": lambda: cmd_report(args, store),
+            "finalize": lambda: cmd_finalize(args, store),
             "doctor": lambda: cmd_doctor(store),
         }
         return commands[args.command]()
-    except (RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+    except (RuntimeError, ValueError, KeyError, OSError, TimeoutError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

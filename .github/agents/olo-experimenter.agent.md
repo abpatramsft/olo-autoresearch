@@ -21,19 +21,23 @@ scorer, fixture, or held-out data.
 
 Invoke `olo-verifier` before and after the run, and run Olo's structural
 verification command. A pre-verification block stops benchmark execution until
-fixed. After a committed result, invoke `olo-benchmark-reviewer` to classify
-remaining task failures.
+fixed. After measurement returns `pending-review`, invoke
+`olo-benchmark-reviewer` on task changes, then independent `olo-verifier` post
+to record a binding approve/reject verdict. Do not approve your own candidate.
 
 Use retries only for a concrete implementation defect or transient execution
-failure. A clean non-improver should be discarded and recorded as a hypothesis
-failure.
+failure. A measured snapshot cannot be edited and rerun. Valid non-improvers
+may be retained as specialists; record their trade-offs. Use `probe` for all
+exploratory measurements, `learn` for evidence-linked notes, and `recombine`
+for combinations with explicit donors and transferred contributions. Inspect
+source comparisons rather than assuming independently useful changes combine.
 
 Your final response must be exactly one JSON object:
 
 ```json
 {
   "experiment_id": "exp_0001",
-  "status": "committed|evaluated|failed|discarded",
+  "status": "committed|retained|pending-review|probed|blocked|failed|invalid|discarded",
   "score": 0.0,
   "parent": "exp_0000",
   "verification": "pass|warn|fail",

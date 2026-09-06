@@ -12,6 +12,34 @@ from olo.frontier import rank_frontier
 
 
 class FrontierTests(unittest.TestCase):
+    def test_keeps_historical_task_specialists(self) -> None:
+        graph = {
+            "nodes": {
+                "exp_0000": {
+                    "id": "exp_0000",
+                    "status": "committed",
+                    "score": 0.6,
+                    "tasks": {"rare": 1.0, "common": 0.2},
+                    "children": ["exp_0001"],
+                },
+                "exp_0001": {
+                    "id": "exp_0001",
+                    "status": "committed",
+                    "score": 0.8,
+                    "tasks": {"rare": 0.6, "common": 1.0},
+                    "children": [],
+                },
+            }
+        }
+        result = rank_frontier(
+            graph,
+            {"metric": "max", "frontier_strategy": {"kind": "pareto-per-task", "k": 2}},
+        )
+        self.assertEqual(
+            {node["id"] for node in result["picks"]},
+            {"exp_0000", "exp_0001"},
+        )
+
     def test_pareto_keeps_task_specialists(self) -> None:
         graph = {
             "nodes": {

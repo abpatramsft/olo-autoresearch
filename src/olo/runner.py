@@ -10,7 +10,9 @@ from typing import Any
 
 from .gitops import capture_diff, changed_files, commit_all
 from .state import StateStore
-from .utils import atomic_write_json, finite_number, quote_shell, utc_now
+from .research import decide, fingerprint, trace_facts
+from .measurement import measurement_snapshot
+from .utils import FileLock, atomic_write_json, finite_number, quote_shell, utc_now
 from .verification import verify_experiment
 
 
@@ -48,6 +50,8 @@ def _run_shell(
                 shell=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=timeout,
             )
@@ -135,8 +139,16 @@ def run_experiment(
     *,
     timeout_override: int | None = None,
     check: bool = False,
+    probe: bool = False,
 ) -> dict[str, Any]:
+    with FileLock(store.experiment_dir(exp_id) / "run.lock", timeout=0.2, stale_after=86400):
+        return _execute(store, exp_id, timeout_override=timeout_override, check=check, probe=probe)
+
+
+def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, check: bool, probe: bool) -> dict[str, Any]:
     config = store.config()
+    if config.get("phase") == "finalized":
+        raise RuntimeError("this evaluation version is finalized; no further tuning is allowed")
     graph = store.graph()
     node = graph.get("nodes", {}).get(exp_id)
     if node is None:
@@ -150,12 +162,13 @@ def run_experiment(
             f"{exp_id} is discarded; restore the baseline with "
             "`python olo.py baseline --prepare` or create a new experiment"
         )
-    if node.get("status") == "committed" and not check:
-        raise RuntimeError(f"{exp_id} is already committed")
+    if node.get("status") in {"committed", "retained", "pending-review", "invalid"} and not check:
+        raise RuntimeError(f"{exp_id} already has a measured snapshot; create a new experiment")
     attempts = int(node.get("attempts", 0))
     max_attempts = int(config.get("max_attempts", 3))
     if (
         not check
+        and not probe
         and node.get("kind") != "baseline"
         and attempts >= max_attempts
     ):
@@ -174,6 +187,25 @@ def run_experiment(
     target = worktree / str(config["target"])
     if not target.exists():
         raise RuntimeError(f"configured target does not exist in worktree: {target}")
+    pre = verify_experiment(store, exp_id, phase="pre", persist=not check)
+    if not pre["passed"]:
+        preflight = int(node.get("preflight_count", 0)) + 1
+        preflight_dir = store.experiment_dir(exp_id) / "preflight" / f"{preflight:03d}"
+        preflight_dir.mkdir(parents=True, exist_ok=True)
+        (preflight_dir / "diff.patch").write_text(capture_diff(worktree), encoding="utf-8")
+        outcome = {
+            "experiment_id": exp_id, "status": "check-failed" if check else "blocked",
+            "score": None, "gates_passed": False, "gate_results": [],
+            "error": "pre-verification failed", "verification": pre,
+            "preflight": preflight, "duration_seconds": 0.0, "created_at": utc_now(),
+            "artifact_dir": str(preflight_dir.relative_to(store.state_dir)),
+        }
+        record = preflight_dir / "outcome.json"
+        atomic_write_json(record, outcome)
+        store.update_node(exp_id, preflight_count=preflight, latest_record=str(record.relative_to(store.state_dir)))
+        store.add_event("experiment_blocked", experiment_id=exp_id, preflight=preflight)
+        return outcome
+    store.consume_evaluation(baseline=node.get("kind") == "baseline")
     if check:
         checks_root = store.experiment_dir(exp_id) / "checks"
         existing = [
@@ -184,6 +216,10 @@ def run_experiment(
         attempt = max(existing, default=0) + 1
         attempt_dir = checks_root / f"{attempt:03d}"
         traces_dir = attempt_dir / "traces"
+    elif probe:
+        attempt = int(node.get("probe_count", 0)) + 1
+        attempt_dir = store.experiment_dir(exp_id) / "probes" / f"{attempt:03d}"
+        traces_dir = attempt_dir / "traces"
     else:
         attempt = attempts + 1
         attempt_dir = store.attempt_dir(exp_id, attempt)
@@ -192,35 +228,14 @@ def run_experiment(
     traces_dir.mkdir(parents=True, exist_ok=True)
     result_path = attempt_dir / "benchmark-result.json"
     timeout = int(timeout_override or config.get("timeout_seconds", 300))
-    if not check:
+    if probe:
+        store.update_node(exp_id, probe_count=attempt)
+        store.add_event("probe_started", experiment_id=exp_id, probe=attempt)
+    elif not check:
         store.update_node(exp_id, status="active", attempts=attempt, current_attempt=attempt)
         store.add_event("experiment_started", experiment_id=exp_id, attempt=attempt)
     else:
         store.add_event("experiment_check_started", experiment_id=exp_id, check=attempt)
-
-    pre = verify_experiment(store, exp_id, phase="pre", persist=not check)
-    if not pre["passed"]:
-        outcome = {
-            "experiment_id": exp_id,
-            "check" if check else "attempt": attempt,
-            "status": "check-failed" if check else "failed",
-            "score": None,
-            "parent_score": None,
-            "gates_passed": False,
-            "gate_results": [],
-            "trace_count": 0,
-            "duration_seconds": 0.0,
-            "error": "pre-verification failed",
-            "verification": pre,
-            "created_at": utc_now(),
-        }
-        atomic_write_json(
-            attempt_dir / ("check.json" if check else "outcome.json"),
-            outcome,
-        )
-        if not check:
-            store.update_node(exp_id, status="failed", error=outcome["error"])
-        return outcome
 
     benchmark_command = fill_command(str(config["benchmark"]), worktree, target)
     env = os.environ.copy()
@@ -231,6 +246,9 @@ def run_experiment(
             "OLO_TARGET": str(target),
             "OLO_RESULT_PATH": str(result_path),
             "OLO_TRACES_DIR": str(traces_dir),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
         }
     )
     benchmark = _run_shell(
@@ -246,9 +264,6 @@ def run_experiment(
         benchmark["stderr"], encoding="utf-8"
     )
 
-    diff = capture_diff(worktree)
-    (attempt_dir / "diff.patch").write_text(diff, encoding="utf-8")
-    files = changed_files(worktree)
     benchmark_error: str | None = None
     result: dict[str, Any] | None = None
     if benchmark["timed_out"]:
@@ -291,6 +306,9 @@ def run_experiment(
                 }
             )
 
+    diff = capture_diff(worktree)
+    (attempt_dir / "diff.patch").write_text(diff, encoding="utf-8")
+    files = changed_files(worktree)
     gates_passed = benchmark_error is None and all(
         item["passed"] for item in gate_results
     )
@@ -320,6 +338,7 @@ def run_experiment(
             "duration_seconds": float(benchmark["duration_seconds"]),
             "error": benchmark_error,
             "verification": pre,
+            "artifact_dir": str(attempt_dir.relative_to(store.state_dir)),
             "created_at": utc_now(),
         }
         post = verify_experiment(
@@ -347,13 +366,16 @@ def run_experiment(
     parent_score = (
         None if parent.get("score") is None else float(parent.get("score"))
     )
+    decision = decide(config, parent, result) if result is not None else {"meaningful": False, "task_changes": {}}
     improved = (
         score is not None
         and gates_passed
-        and _is_improvement(str(config.get("metric", "max")), score, parent_score)
+        and decision["meaningful"]
     )
     if benchmark_error is not None:
         status = "failed"
+    elif gates_passed and config.get("review_required"):
+        status = "pending-review"
     elif improved:
         status = "committed"
     else:
@@ -366,6 +388,22 @@ def run_experiment(
         "score": score,
         "parent_score": parent_score,
         "improved": improved,
+        "decision": decision,
+        "task_changes": decision["task_changes"],
+        "source_comparison": {
+            source_id: {
+                "score": graph["nodes"][source_id].get("score"),
+                "task_changes": decide(config, graph["nodes"][source_id], result)["task_changes"],
+                "gain": decide(config, graph["nodes"][source_id], result)["gain"],
+            }
+            for source_id in [node["parent"], *(node.get("donors") or [])]
+            if source_id != "root" and result is not None
+        },
+        "trace_facts": trace_facts(traces_dir),
+        "evaluation_version": config.get("evaluation_version", "legacy"),
+        "artifact_dir": str(attempt_dir.relative_to(store.state_dir)),
+        "fingerprint": fingerprint(worktree),
+        "measurement": measurement_snapshot(config, worktree),
         "gates_passed": gates_passed,
         "gate_results": gate_results,
         "benchmark": {
@@ -377,6 +415,7 @@ def run_experiment(
         "changed_files": files,
         "trace_count": trace_count,
         "duration_seconds": float(benchmark["duration_seconds"]),
+        "total_duration_seconds": float(benchmark["duration_seconds"]) + sum(item["duration_seconds"] for item in gate_results),
         "commit": None,
         "error": benchmark_error,
         "created_at": utc_now(),
@@ -393,11 +432,16 @@ def run_experiment(
         improved = False
         outcome["error"] = "post-verification failed"
     commit: str | None = None
-    if status == "committed":
+    if probe:
+        status = "probed" if post["passed"] and benchmark_error is None and gates_passed else "probe-failed"
+        improved = False
+    elif status in {"committed", "pending-review"}:
         commit = commit_all(
             worktree,
             f"olo({exp_id}): {str(node.get('hypothesis') or '')[:100]}",
         )
+        if node.get("kind") == "baseline":
+            atomic_write_json(store.state_dir / "measurement.json", outcome["measurement"])
     outcome.update(
         {
             "status": status,
@@ -407,6 +451,10 @@ def run_experiment(
         }
     )
     atomic_write_json(attempt_dir / "outcome.json", outcome)
+    if probe:
+        store.update_node(exp_id, latest_record=str((attempt_dir / "outcome.json").relative_to(store.state_dir)))
+        store.add_event("probe_finished", experiment_id=exp_id, probe=attempt, score=score, status=status)
+        return outcome
     store.update_node(
         exp_id,
         status=status,
@@ -417,6 +465,11 @@ def run_experiment(
         duration_seconds=float(benchmark["duration_seconds"]),
         changed_files=files,
         error=outcome.get("error"),
+        review_status="pending" if status == "pending-review" else "approved" if status == "committed" else "unapproved",
+        latest_record=str((attempt_dir / "outcome.json").relative_to(store.state_dir)),
+        task_changes=decision["task_changes"],
+        decision=decision,
+        evaluation_version=config.get("evaluation_version", "legacy"),
     )
     store.add_event(
         "experiment_finished",
@@ -425,6 +478,11 @@ def run_experiment(
         status=status,
         score=score,
         improved=improved,
+    )
+    store.add_annotation(
+        exp_id, annotation_type="observation",
+        text=f"Measured score {score}; gain {decision.get('gain')}; improved tasks {decision['task_changes'].get('improved', [])}; regressed tasks {decision['task_changes'].get('regressed', [])}.",
+        payload={"decision": decision, "trace_facts": outcome["trace_facts"], "evidence": str((attempt_dir / "outcome.json").relative_to(store.state_dir))},
     )
     if node.get("kind") == "baseline" and status == "committed":
         latest_config = store.config()

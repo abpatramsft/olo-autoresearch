@@ -151,8 +151,9 @@ print(json.dumps(result))
                 encoding="utf-8",
             )
             recovered = json.loads(cli(repo, "baseline").stdout)
-            self.assertEqual(recovered["status"], "committed")
+            self.assertEqual(recovered["status"], "pending-review")
             self.assertEqual(recovered["attempt"], 3)
+            cli(repo, "review", "exp_0000", "--verdict", "approve", "--reviewer", "test", "--reason", "Recovered baseline evidence checked.")
             self.assertEqual(
                 json.loads(cli(repo, "status", "--json").stdout)["phase"],
                 "ready-to-optimize",

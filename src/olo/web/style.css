@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
-  --paper: #edf3f7;
-  --paper-deep: #dfe9f0;
+  --paper: #f3f5f4;
+  --paper-deep: #e5eae8;
   --ink: #142130;
   --muted: #607184;
   --grid: #c8d6e1;
@@ -9,18 +9,19 @@
   --cobalt: #2457d6;
   --cobalt-soft: #dbe5ff;
   --signal: #ff6b35;
-  --mint: #1d9f78;
+  --mint: #16795b;
   --crimson: #c53f52;
   --slate: #7a8b9b;
-  --white: #f9fcff;
+  --white: #ffffff;
   --shadow: 0 18px 50px rgba(31, 60, 82, 0.12);
-  --display: "Arial Narrow", "Aptos Display", "Segoe UI", sans-serif;
+  --display: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
   --body: "Segoe UI Variable", "Segoe UI", sans-serif;
   --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 }
 
 * {
   box-sizing: border-box;
+  letter-spacing: 0 !important;
 }
 
 [hidden] {
@@ -46,7 +47,9 @@ body {
 }
 
 button,
-a {
+a,
+input,
+select {
   font: inherit;
 }
 
@@ -58,7 +61,7 @@ tr:focus-visible {
 }
 
 .page-shell {
-  width: min(1560px, calc(100% - 40px));
+  width: min(1560px, calc(100% - 48px));
   margin: 0 auto;
   padding-bottom: 56px;
 }
@@ -195,7 +198,7 @@ tr:focus-visible {
 
 .run-strip {
   display: grid;
-  grid-template-columns: minmax(320px, 1.8fr) repeat(3, minmax(150px, 0.65fr));
+  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 0.7fr));
   border-bottom: 2px solid var(--ink);
   background: rgba(249, 252, 255, 0.72);
   backdrop-filter: blur(12px);
@@ -203,8 +206,10 @@ tr:focus-visible {
 
 .run-identity,
 .metric-cell {
-  min-height: 146px;
-  padding: 24px 26px;
+  min-height: 132px;
+  min-width: 0;
+  padding: 22px 20px;
+  overflow-wrap: anywhere;
 }
 
 .metric-cell {
@@ -231,13 +236,12 @@ tr:focus-visible {
   font-family: var(--display);
   font-stretch: condensed;
   font-weight: 800;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .run-identity h1 {
-  font-size: clamp(36px, 5vw, 68px);
-  letter-spacing: -0.045em;
-  line-height: 0.92;
+  font-size: 28px;
+  line-height: 1.15;
 }
 
 .run-identity p {
@@ -250,9 +254,8 @@ tr:focus-visible {
 .metric-cell strong {
   margin-top: 14px;
   font-family: var(--display);
-  font-size: clamp(31px, 4vw, 52px);
-  line-height: 0.85;
-  text-transform: uppercase;
+  font-size: 32px;
+  line-height: 1.1;
 }
 
 .metric-cell small {
@@ -270,14 +273,14 @@ main {
 }
 
 .panel {
-  border: 1px solid var(--grid-strong);
+  min-width: 0;
+  border-top: 1px solid var(--grid-strong);
   background: rgba(249, 252, 255, 0.88);
-  box-shadow: var(--shadow);
 }
 
 .panel-heading {
-  min-height: 76px;
-  padding: 19px 22px 17px;
+  min-height: 68px;
+  padding: 16px 18px;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -291,7 +294,7 @@ main {
 }
 
 .panel-heading h2 {
-  font-size: 24px;
+  font-size: 20px;
   letter-spacing: -0.02em;
 }
 
@@ -337,16 +340,16 @@ main {
 
 .chart-frame {
   position: relative;
-  min-height: 410px;
-  overflow: hidden;
+  min-height: 310px;
+  overflow: auto;
   background:
     linear-gradient(120deg, transparent 0 62%, rgba(36, 87, 214, 0.055) 62% 78%, transparent 78%),
     rgba(237, 243, 247, 0.45);
 }
 
 #experiment-chart {
-  width: 100%;
-  min-height: 410px;
+  min-width: 100%;
+  height: 310px;
   display: block;
 }
 
@@ -427,12 +430,10 @@ main {
 }
 
 .frontier-panel {
-  min-height: 486px;
+  min-height: 378px;
 }
 
 .strategy-chip {
-  padding: 6px 8px;
-  border: 1px solid var(--cobalt);
   color: var(--cobalt);
   font-family: var(--mono);
   font-size: 9px;
@@ -495,23 +496,26 @@ main {
 }
 
 .ledger-wrap {
+  max-height: 620px;
   overflow-x: auto;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 900px;
+  min-width: 860px;
 }
 
 th,
 td {
-  padding: 13px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--grid);
   text-align: left;
 }
 
 th {
+  position: sticky;
+  top: 0;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 9px;
@@ -643,7 +647,8 @@ td.mono-cell {
 
 dialog {
   width: min(980px, calc(100vw - 32px));
-  max-height: min(820px, calc(100vh - 32px));
+  height: min(850px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
   padding: 0;
   border: 2px solid var(--ink);
   color: var(--ink);
@@ -657,8 +662,8 @@ dialog::backdrop {
 }
 
 .detail-header {
-  min-height: 88px;
-  padding: 20px 24px;
+  min-height: 72px;
+  padding: 16px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -669,11 +674,11 @@ dialog::backdrop {
 }
 
 .detail-header h2 {
-  font-size: 31px;
+  font-size: 22px;
 }
 
 .detail-header button {
-  padding: 8px 12px;
+  padding: 8px;
   border: 1px solid var(--ink);
   color: var(--ink);
   background: transparent;
@@ -681,13 +686,16 @@ dialog::backdrop {
 }
 
 .detail-body {
-  padding: 24px;
+  padding: 20px;
+  min-height: 0;
+  min-width: 0;
   overflow: auto;
+  overflow-wrap: anywhere;
 }
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   border: 1px solid var(--grid-strong);
   background: var(--grid-strong);
@@ -731,22 +739,80 @@ pre {
   max-height: 320px;
   overflow: auto;
   border: 1px solid var(--grid);
-  background: #101c29;
-  color: #d8e8f3;
+  background: #eef2f1;
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
+
+#mode-status { font-size: 18px; line-height: 1.25; }
+.command-button, .icon-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--grid-strong);
+  border-radius: 4px;
+  background: var(--white);
+  color: var(--ink);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.icon-button { width: 38px; height: 38px; padding: 8px; }
+.command-button:hover, .icon-button:hover { border-color: var(--cobalt); background: var(--cobalt-soft); }
+.dialog-actions, .ledger-controls { display: flex; align-items: center; gap: 8px; }
+.ledger-controls { flex-wrap: wrap; }
+input, select { min-height: 36px; min-width: 0; border: 1px solid var(--grid-strong); border-radius: 4px; padding: 7px 10px; background: var(--white); color: var(--ink); font-size: 12px; }
+input[type="search"] { width: 220px; }
+input:focus-visible, select:focus-visible, .frontier-card:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 2px; }
+.row-link { border: 0; padding: 0; background: none; color: var(--cobalt); font: inherit; cursor: pointer; }
+td small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.hypothesis-cell { min-width: 260px; line-height: 1.5; }
+.hypothesis-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; max-height: 4.5em; overflow: hidden; }
+.evidence-count { min-width: 138px; }
+.dot.retained, .status-tag.retained::before { background: #8d771a; }
+.dot.pending-review, .status-tag.pending-review::before { background: #c56713; }
+.status-tag.invalid::before { background: var(--crimson); }
+.experiment-node.retained circle { fill: #8d771a; }
+.experiment-node.pending-review circle { fill: #c56713; }
+.experiment-node.invalid circle { fill: var(--crimson); }
+.donor-line { stroke: #9a6514; stroke-width: 1.5; stroke-dasharray: 5 4; opacity: 0.7; }
+dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.detail-section { border-top: 1px solid var(--grid); padding-top: 18px; }
+.detail-section p, .detail-section li { font-size: 13px; line-height: 1.6; }
+.task-table { min-width: 0; }
+.task-table tbody tr { cursor: default; }
+details { padding: 10px 0; border-bottom: 1px solid var(--grid); font-size: 12px; }
+summary { cursor: pointer; line-height: 1.6; }
+.artifact-list { padding-left: 20px; }
+.artifact-list a, .summary-content a { color: var(--cobalt); overflow-wrap: anywhere; }
+.summary-content { min-height: 0; padding: 20px 28px 36px; overflow: auto; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.summary-content h1 { font-family: var(--display); font-size: 25px; line-height: 1.25; }
+.summary-content h2 { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--grid); font-size: 18px; }
+.summary-content table { min-width: 0; display: block; overflow: auto; max-width: 100%; font-size: 12px; }
+.summary-content th { position: static; }
+.summary-content li { margin: 8px 0; }
+.summary-content code { font-family: var(--mono); font-size: 0.85em; }
+.summary-content tbody tr { cursor: default; }
+.note-card, .frontier-card, .panel-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.frontier-list, .note-list { max-height: 460px; overflow: auto; }
 
 @media (max-width: 1040px) {
   .run-strip {
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .run-identity {
     grid-column: 1 / -1;
-    min-height: 120px;
+    min-height: 100px;
     border-bottom: 1px solid var(--grid-strong);
   }
 
@@ -780,11 +846,12 @@ pre {
   }
 
   .run-strip {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .metric-cell {
-    min-height: 105px;
+    padding: 14px 10px;
+    min-height: 120px;
     border-left: 0;
     border-top: 1px solid var(--grid-strong);
   }
@@ -800,7 +867,7 @@ pre {
 
   .chart-frame,
   #experiment-chart {
-    min-height: 330px;
+    min-height: 310px;
   }
 
   .notebook-panel {
@@ -813,8 +880,21 @@ pre {
   }
 
   .detail-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .header-meta { gap: 10px; }
+  .command-button { padding: 8px; font-size: 11px; }
+  .connection { font-size: 9px; }
+  .metric-cell strong { font-size: 26px; }
+  #mode-status { font-size: 14px; }
+  .run-identity { padding: 18px 14px; }
+  .run-identity h1 { font-size: 24px; }
+  .ledger-controls { width: 100%; }
+  .ledger-controls input, .ledger-controls select { flex: 1 1 130px; width: 100%; }
+  .detail-body, .summary-content { padding: 16px; }
+  .detail-header { padding: 14px; gap: 8px; }
+  .detail-header h2 { font-size: 20px; }
+  .summary-content h1 { font-size: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

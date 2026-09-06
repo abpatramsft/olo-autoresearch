@@ -118,6 +118,11 @@ def finite_number(value: Any) -> float:
     return number
 
 
+def generated_artifact(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return any(part in {"__pycache__", ".pytest_cache"} for part in normalized.split("/")) or normalized.endswith((".pyc", ".pyo"))
+
+
 def is_pid_running(pid: int) -> bool:
     if pid <= 0:
         return False

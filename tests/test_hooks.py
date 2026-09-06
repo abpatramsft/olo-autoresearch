@@ -90,6 +90,24 @@ class HookTests(unittest.TestCase):
             )
             self.assertEqual(result["decision"], "block")
 
+    def test_accepts_review_pending_experiment_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = self.make_store(Path(temp))
+            result = handle_hook(store, "subagent-stop", {
+                "agentName": "olo-experimenter",
+                "response": '{"experiment_id":"exp_0001","status":"pending-review","score":0.8,"parent":"exp_0000","verification":"pass","learnings":[]}',
+            })
+            self.assertEqual(result, {})
+
+    def test_finalized_run_blocks_even_worktree_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = self.make_store(Path(temp))
+            config = store.config()
+            config["phase"] = "finalized"
+            store.save_config(config)
+            result = handle_hook(store, "pre-tool-use", {"toolName": "edit", "toolArgs": {"path": str(Path(temp) / ".olo/worktrees/exp_0001/agent.py")}})
+            self.assertEqual(result.get("permissionDecision"), "deny")
+
 
 if __name__ == "__main__":
     unittest.main()

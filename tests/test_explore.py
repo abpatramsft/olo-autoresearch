@@ -242,8 +242,9 @@ class ExploreTests(unittest.TestCase):
             self.assertEqual(node_after_check["status"], "pending")
 
             baseline = json.loads(cli(repo, "baseline").stdout)
-            self.assertEqual(baseline["status"], "committed")
+            self.assertEqual(baseline["status"], "pending-review")
             self.assertAlmostEqual(baseline["score"], 1 / 3)
+            cli(repo, "review", "exp_0000", "--verdict", "approve", "--reviewer", "test", "--reason", "Baseline benchmark and gate checked.")
             status = json.loads(cli(repo, "status", "--json").stdout)
             self.assertEqual(status["phase"], "ready-to-optimize")
             self.assertEqual(status["best_experiment"], "exp_0000")

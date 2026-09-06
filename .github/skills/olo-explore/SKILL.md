@@ -26,7 +26,8 @@ Use `python olo.py` on Windows and the available Python 3 launcher elsewhere.
 ## Firm rules
 
 1. Do not create benchmark infrastructure on `main`.
-2. Do not start optimization before the baseline status is `committed`.
+2. Do not start optimization before the measured baseline is independently
+  reviewed and its status becomes `committed`.
 3. Constructed benchmarks require at least one real pass/fail gate.
 4. Emit one trace per independently evaluated item whenever possible.
 5. A benchmark command measures only. Training/build steps that produce an
@@ -35,6 +36,10 @@ Use `python olo.py` on Windows and the available Python 3 launcher elsewhere.
    successful score of zero.
 7. Document metric meaning, direction, determinism, gaming risks, and binding
    resource before the baseline run.
+8. Version the benchmark. Include hard counterexamples and distractors, not
+  just paraphrases of visible cases. Keep development, reusable validation,
+  and an untouched final test distinct. A perfect tiny benchmark is a ceiling,
+  not evidence of production reliability.
 
 ## 1. Initialize exploration
 
@@ -54,6 +59,11 @@ If Olo already reports `phase=ready-for-baseline` and `config.json` already has
 a target and benchmark, it came from the direct `olo init` compatibility path.
 Skip goal construction and `explore configure`; prepare/check/audit the baseline
 and run `python olo.py baseline`.
+
+To replace a frozen measurement system, stop its dashboard and run
+`python olo.py evaluation new --version <new-label> --from <approved-id-or-root>`.
+This archives the prior state and resets scores. Never edit a measured harness
+in place or mix results from different versions.
 
 ## 2. Explore the repository
 
@@ -154,6 +164,10 @@ still exits zero is not a gate.
 Protect the benchmark, gates, scorer, fixtures, and held-out data from descendant
 experiments.
 
+Configure `--critical-task <id>` for behavior that must not regress. Choose a
+validation floor relative to the measured baseline and include relevant
+invariants. Reusing validation makes it development feedback, not a final test.
+
 ## 6. Configure the discovered workspace
 
 From the main repository root, configure Olo. Paths refer to files in the
@@ -173,12 +187,21 @@ python olo.py explore configure \
   --determinism <deterministic|temp-zero|noisy> \
   --resource-profile "<binding resource and concurrency safety>" \
   --meaningful-improvement "<noise floor or useful delta>" \
+  --min-improvement 0.01 \
+  --evaluation-version "<version>" \
+  --score-ceiling 1.0 \
+  --final-test "<separate final-test command>" \
   --repo-summary "<what the repository does>" \
   --gaming-risk "<specific metric-gaming risk>"
 ```
 
 Add repeated `--gaming-risk` and `--future-dimension` values as needed. This
 creates `.olo/project.md` and changes the phase to `ready-for-baseline`.
+The numeric `--min-improvement`, optional `--min-relative-improvement`,
+`--critical-task`, and `--max-task-regression` are enforced, not inferred from
+prose. Set a ceiling only when the metric has a known limit. Set
+`--max-evaluations` for a run-wide cap. Omit `--final-test` only when no genuinely
+separate final set is available, and state that limitation in the report.
 
 ## 7. Audit the harness
 
@@ -219,7 +242,7 @@ Require:
 - all gates pass;
 - expected task traces exist.
 
-## 9. Commit the baseline
+## 9. Measure and approve the baseline
 
 Run:
 
@@ -228,8 +251,12 @@ python olo.py baseline
 ```
 
 Olo captures the benchmark, fixtures, instrumentation, and gates in the
-`olo/exp_0000` branch, records its score, and changes the workspace phase to
-`ready-to-optimize`.
+baseline branch, records its score and measurement fingerprint, and returns
+`pending-review`. Have an independent verifier review the saved evidence and
+record `python olo.py review exp_0000 --verdict approve --reviewer <name>
+--reason "<scope, gates, traces, and measurement audit>"`. Only approval changes
+the phase to `ready-to-optimize`. Do not read or run the final-test cases during
+optimization; finalization executes that command once after winner selection.
 
 Confirm:
 

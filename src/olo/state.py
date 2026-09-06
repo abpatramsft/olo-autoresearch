@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from pathlib import Path
+import re
+import uuid
 from typing import Any, Callable
 
 from .utils import (
     FileLock,
     append_jsonl,
     atomic_write_json,
+    atomic_write_text,
     read_json,
     read_jsonl,
     utc_now,
@@ -73,7 +77,13 @@ class StateStore:
         self.experiments_dir.mkdir(parents=True, exist_ok=True)
         now = utc_now()
         config = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "review_required": True,
+            "min_improvement": 0.01,
+            "min_relative_improvement": 0.0,
+            "critical_tasks": [],
+            "max_task_regression": 0.0,
+            "evaluation_version": "v1",
             "project_name": project_name,
             "repo_root": str(self.root),
             "phase": phase,
@@ -331,19 +341,45 @@ class StateStore:
         hypothesis: str,
         *,
         kind: str = "experiment",
+        donors: list[str] | None = None,
+        contributions: dict[str, str] | None = None,
+        proposal_id: str | None = None,
     ) -> dict[str, Any]:
         with FileLock(self.lock_path):
             graph = read_json(self.graph_path, {"nodes": {}})
             meta = read_json(self.meta_path, {"next_id": 0})
+            config = self.config()
+            if config.get("phase") == "finalized":
+                raise RuntimeError("this evaluation version is finalized")
+            current_round = meta.get("current_round") or {}
+            if current_round and sum(node.get("round_number") == current_round["number"] for node in graph["nodes"].values()) >= current_round["width"] * current_round["budget"]:
+                raise RuntimeError("round allocation budget exhausted")
+            best = self.best_score()
+            ceiling = config.get("score_ceiling")
+            if kind != "baseline" and best is not None and ceiling is not None and ((config.get("metric") == "min" and best <= ceiling) or (config.get("metric") != "min" and best >= ceiling)):
+                raise RuntimeError("score ceiling reached; start a harder evaluation version")
             parent = graph.get("nodes", {}).get(parent_id)
             if parent is None:
                 raise RuntimeError(f"unknown parent experiment: {parent_id}")
-            if parent_id != "root" and parent.get("status") != "committed":
+            from .research import eligible_nodes
+
+            if parent_id != "root" and parent_id not in {item["id"] for item in eligible_nodes(graph)}:
                 raise RuntimeError(
-                    f"parent {parent_id} is {parent.get('status')}; branch from a committed node"
+                    f"parent {parent_id} is {parent.get('status')}; branch from an approved node"
                 )
+            donor_ids = list(dict.fromkeys(donors or []))
+            approved = {item["id"]: item for item in eligible_nodes(graph)}
+            for donor_id in donor_ids:
+                if donor_id == parent_id or donor_id not in approved:
+                    raise RuntimeError("donors must be distinct approved experiments, different from the base")
+                if approved[donor_id].get("evaluation_version") != parent.get("evaluation_version"):
+                    raise RuntimeError("base and donors must use the same evaluation version")
+                if not (contributions or {}).get(donor_id, "").strip():
+                    raise ValueError(f"describe the contribution from donor {donor_id}")
             next_id = int(meta.get("next_id", 0))
             exp_id = f"exp_{next_id:04d}"
+            if proposal_id:
+                self.update_proposal(proposal_id, status="claimed", experiment_id=exp_id)
             meta["next_id"] = next_id + 1
             now = utc_now()
             worktree = self.worktrees_dir / exp_id
@@ -351,13 +387,20 @@ class StateStore:
                 "id": exp_id,
                 "kind": kind,
                 "parent": parent_id,
+                "operator": "recombine" if donor_ids else "baseline" if kind == "baseline" else "mutation",
+                "donors": donor_ids,
+                "donor_commits": {donor_id: approved[donor_id]["commit"] for donor_id in donor_ids},
+                "contributions": contributions or {},
+                "proposal_id": proposal_id,
+                "round_number": (meta.get("current_round") or {}).get("number"),
+                "evaluation_version": self.config().get("evaluation_version", "legacy"),
                 "children": [],
                 "status": "pending",
                 "hypothesis": hypothesis.strip(),
                 "score": None,
                 "tasks": {},
                 "commit": None,
-                "branch": f"olo/{exp_id}",
+                "branch": f"{config.get('branch_prefix', 'olo')}/{exp_id}",
                 "worktree": str(worktree),
                 "attempts": 0,
                 "gate_results": [],
@@ -371,6 +414,24 @@ class StateStore:
             atomic_write_json(self.meta_path, meta)
             return dict(node)
 
+    def consume_evaluation(self, *, baseline: bool = False) -> int:
+        config = self.config()
+
+        def mutate(meta: dict[str, Any]) -> int:
+            count = int(meta.get("evaluation_count", 0))
+            if config.get("max_evaluations") is not None and count >= int(config["max_evaluations"]):
+                raise RuntimeError("evaluation budget exhausted")
+            current = meta.get("current_round")
+            if current and not baseline:
+                used = int(current.get("evaluations", 0))
+                if used >= int(current["width"]) * int(current["budget"]):
+                    raise RuntimeError("round evaluation budget exhausted (probes and checks count)")
+                current["evaluations"] = used + 1
+            meta["evaluation_count"] = count + 1
+            return count + 1
+
+        return self.mutate_meta(mutate)
+
     def experiment_dir(self, exp_id: str) -> Path:
         return self.experiments_dir / exp_id
 
@@ -382,6 +443,8 @@ class StateStore:
 
     def latest_outcome(self, exp_id: str) -> dict[str, Any] | None:
         node = self.graph().get("nodes", {}).get(exp_id)
+        if node and node.get("latest_record"):
+            return read_json(self.state_dir / node["latest_record"], None)
         if not node or not node.get("attempts"):
             return None
         path = self.attempt_dir(exp_id, int(node["attempts"])) / "outcome.json"
@@ -397,6 +460,7 @@ class StateStore:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         entry = {
+            "id": "note_" + uuid.uuid4().hex[:12],
             "timestamp": utc_now(),
             "experiment_id": exp_id,
             "task_id": task_id,
@@ -410,6 +474,43 @@ class StateStore:
     def annotations(self) -> list[dict[str, Any]]:
         return read_jsonl(self.annotations_path)
 
+    def add_learning(self, exp_id: str, *, text: str, tags: list[str], supersedes: list[str], kind: str = "hypothesis") -> dict[str, Any]:
+        node = self.graph().get("nodes", {}).get(exp_id)
+        if not node or not self.latest_outcome(exp_id):
+            raise RuntimeError("a learning must reference an experiment with saved evidence")
+        known = {item.get("id") for item in self.annotations()}
+        if any(note_id not in known for note_id in supersedes):
+            raise RuntimeError("unknown superseded learning")
+        if not text.strip():
+            raise ValueError("learning text cannot be empty")
+        return self.add_annotation(exp_id, text=text.strip(), annotation_type="learning", payload={
+            "kind": kind, "tags": sorted(set(tags)), "supersedes": supersedes,
+            "evidence": node.get("latest_record") or str((self.attempt_dir(exp_id, int(node["attempts"])) / "outcome.json").relative_to(self.state_dir)),
+        })
+
+    def learning_context(self, *, query: str = "", parent: str | None = None, limit: int = 12) -> list[dict[str, Any]]:
+        annotations = self.annotations()
+        superseded = {note_id for item in annotations for note_id in (item.get("payload") or {}).get("supersedes", [])}
+        material = [item for item in annotations if item.get("type") not in {"verification", "review"} and item.get("id") not in superseded]
+        terms = set(re.findall(r"[a-z0-9]{3,}", query.lower()))
+        nodes = self.graph().get("nodes", {})
+        lineage: set[str] = set()
+        pending = [parent] if parent else []
+        while pending:
+            exp_id = pending.pop()
+            if not exp_id or exp_id in lineage:
+                continue
+            lineage.add(exp_id)
+            node = nodes.get(exp_id, {})
+            pending.extend([node.get("parent"), *(node.get("donors") or [])])
+
+        def relevance(item: dict[str, Any]) -> tuple:
+            payload = item.get("payload") or {}
+            words = set(re.findall(r"[a-z0-9]{3,}", (item.get("text", "") + " " + " ".join(payload.get("tags") or [])).lower()))
+            return (len(terms & words) * 2 + (4 if item.get("experiment_id") in lineage else 0), item.get("timestamp", ""), item.get("id", ""))
+
+        return sorted(material, key=relevance, reverse=True)[:max(0, limit)]
+
     def add_proposal(
         self,
         *,
@@ -421,6 +522,8 @@ class StateStore:
         confidence: str,
     ) -> dict[str, Any]:
         entry = {
+            "id": "idea_" + uuid.uuid4().hex[:12],
+            "status": "proposed",
             "timestamp": utc_now(),
             "source": source,
             "title": title,
@@ -430,12 +533,39 @@ class StateStore:
             "confidence": confidence,
             "consumed": False,
         }
-        append_jsonl(self.proposals_path, entry)
+        with FileLock(self.proposals_path.with_suffix(".jsonl.lock")):
+            proposals = self.proposals()
+            signature = " ".join(hypothesis.lower().split())
+            for existing in proposals:
+                if existing.get("parent") == parent and " ".join(existing.get("hypothesis", "").lower().split()) == signature and existing.get("status", "proposed") not in {"rejected", "superseded"}:
+                    return existing
+            atomic_write_text(self.proposals_path, "".join(json.dumps(item, sort_keys=True) + "\n" for item in [*proposals, entry]))
         self.add_event("proposal_added", title=title, source=source)
         return entry
 
     def proposals(self) -> list[dict[str, Any]]:
         return read_jsonl(self.proposals_path)
+
+    def update_proposal(self, proposal_id: str, *, status: str, experiment_id: str | None = None) -> dict[str, Any]:
+        transitions = {
+            "proposed": {"claimed", "rejected", "superseded"},
+            "claimed": {"tested", "proposed", "rejected", "superseded"},
+            "tested": {"superseded"}, "rejected": set(), "superseded": set(),
+        }
+        with FileLock(self.proposals_path.with_suffix(".jsonl.lock")):
+            proposals = self.proposals()
+            item = next((value for value in proposals if value.get("id") == proposal_id), None)
+            if item is None:
+                raise RuntimeError(f"unknown proposal: {proposal_id}")
+            if status not in transitions.get(item.get("status", "proposed"), set()):
+                raise RuntimeError(f"cannot move proposal from {item.get('status')} to {status}")
+            item.update(status=status, consumed=status != "proposed", updated_at=utc_now())
+            if experiment_id:
+                item["experiment_id"] = experiment_id
+            atomic_write_text(self.proposals_path, "".join(json.dumps(value, sort_keys=True) + "\n" for value in proposals))
+            result = dict(item)
+        self.add_event("proposal_updated", proposal_id=proposal_id, status=status, experiment_id=experiment_id)
+        return result
 
     def add_event(self, event: str, **details: Any) -> None:
         append_jsonl(
@@ -447,11 +577,13 @@ class StateStore:
         return read_jsonl(self.events_path)
 
     def best_node(self) -> dict[str, Any] | None:
+        from .research import eligible_nodes
+
         config = self.config()
         graph = self.graph()
         committed = [
             node
-            for node in graph["nodes"].values()
+            for node in eligible_nodes(graph)
             if node.get("status") == "committed" and node.get("score") is not None
         ]
         if not committed:
@@ -522,11 +654,11 @@ class StateStore:
         walk("root", 0)
         return lines
 
-    def scratchpad(self) -> str:
+    def scratchpad(self, *, query: str = "", parent: str | None = None, limit: int = 12) -> str:
         status = self.status_summary()
         graph = self.graph()
-        annotations = self.annotations()[-12:]
-        proposals = self.proposals()[-10:]
+        annotations = self.learning_context(query=query or str(status.get("goal") or ""), parent=parent, limit=limit)
+        proposals = [item for item in self.proposals() if item.get("status", "proposed") == "proposed"][-10:]
         discarded = [
             node
             for node in graph["nodes"].values()
@@ -545,7 +677,7 @@ class StateStore:
             "",
             "## Experiment Tree",
             "```text",
-            *self.tree_lines(),
+            *self.tree_lines()[:80],
             "```",
         ]
         discovery = self.discovery()
@@ -578,15 +710,21 @@ class StateStore:
                     f"{item.get('hypothesis')}"
                 )
         if annotations:
-            lines.extend(["", "## Recent Learnings"])
+            lines.extend(["", "## Relevant Learnings"])
             for item in annotations:
                 task = f" task={item['task_id']}" if item.get("task_id") else ""
+                payload = item.get("payload") or {}
+                category = payload.get("kind") or ("observation" if item.get("type") == "observation" else "interpretation")
                 lines.append(
-                    f"- {item.get('experiment_id')}{task}: {item.get('text')}"
+                    f"- [{category}] {item.get('experiment_id')}{task}: {item.get('text')}"
                 )
+                if payload.get("evidence"):
+                    lines.append(f"  Evidence: {payload['evidence']}")
         return "\n".join(lines) + "\n"
 
     def mode_start(self, *, autonomous: bool, stall_limit: int | None) -> dict[str, Any]:
+        if self.config().get("phase") == "finalized":
+            raise RuntimeError("this evaluation version is finalized")
         def mutate(meta: dict[str, Any]) -> dict[str, Any]:
             mode = meta.setdefault("mode", {})
             mode.update(
@@ -622,9 +760,16 @@ class StateStore:
 
         result = self.mutate_meta(mutate)
         self.add_event("mode_stopped", reason=reason)
+        from .reporting import save_report
+
+        save_report(self)
         return result
 
     def round_start(self, *, width: int, budget: int) -> dict[str, Any]:
+        if width < 1 or budget < 1:
+            raise ValueError("round width and budget must be positive")
+        if self.config().get("phase") == "finalized":
+            raise RuntimeError("this evaluation version is finalized")
         best_before = self.best_score()
 
         def mutate(meta: dict[str, Any]) -> dict[str, Any]:
@@ -647,6 +792,8 @@ class StateStore:
         return result
 
     def round_close(self) -> dict[str, Any]:
+        if any(node.get("status") in {"active", "pending-review"} for node in self.graph()["nodes"].values()):
+            raise RuntimeError("complete active evaluations and reviews before closing the round")
         best_after = self.best_score()
         metric = self.config().get("metric", "max")
         ceiling = self.config().get("score_ceiling")
@@ -656,12 +803,13 @@ class StateStore:
             if not current:
                 raise RuntimeError("no Olo round is open")
             before = current.get("best_before")
+            threshold = max(float(self.config().get("min_improvement", 0)), abs(float(before or 0)) * float(self.config().get("min_relative_improvement", 0)))
             improved = (
                 best_after is not None
                 and (
                     before is None
-                    or (metric == "max" and best_after > before)
-                    or (metric == "min" and best_after < before)
+                    or (metric == "max" and best_after > before and best_after - before + 1e-12 >= threshold)
+                    or (metric == "min" and best_after < before and before - best_after + 1e-12 >= threshold)
                 )
             )
             mode = meta.setdefault("mode", {})
@@ -698,6 +846,9 @@ class StateStore:
 
         result = self.mutate_meta(mutate)
         self.add_event("round_closed", **result)
+        from .reporting import save_report
+
+        save_report(self)
         return result
 
     def update_dashboard(self, *, pid: int | None, port: int | None) -> None:

@@ -143,7 +143,8 @@ The explorer:
 7. configures target, metric, editable scope, and protected paths;
 8. invokes `olo-benchmark-reviewer`;
 9. runs `python olo.py run exp_0000 --check`;
-10. commits the baseline with `python olo.py baseline`.
+10. measures the baseline with `python olo.py baseline`;
+11. obtains an independent binding approval with `python olo.py review`.
 
 Confirm:
 
@@ -250,10 +251,11 @@ Run a non-committing wiring check:
 python olo.py run exp_0000 --check
 ```
 
-Commit the measured baseline:
+Measure the baseline, then have an independent reviewer approve the saved evidence:
 
 ```powershell
 python olo.py baseline
+python olo.py review exp_0000 --verdict approve --reviewer reviewer-name --reason "Checked scope, gates, task traces, and measurement integrity."
 ```
 
 ## Existing-benchmark shortcut
@@ -315,19 +317,67 @@ A constructed benchmark must have at least one real gate.
 | `python olo.py baseline --prepare` | Create the editable `exp_0000` worktree |
 | `python olo.py explore configure` | Save target, benchmark, gates, metric, and project notes |
 | `python olo.py run exp_0000 --check` | Validate real benchmark/gate wiring without committing or consuming an attempt |
-| `python olo.py baseline` | Measure and commit `exp_0000` |
+| `python olo.py baseline` | Save the measured baseline as pending review |
+| `python olo.py review ID --verdict approve --reviewer NAME --reason TEXT` | Bind approval to the measured source and configuration |
+| `python olo.py invalidate ID --reviewer NAME --reason TEXT` | Invalidate a source and its dependent lineage |
 | `python olo.py new --parent ID --hypothesis TEXT` | Allocate an optimization worktree |
 | `python olo.py verify ID --phase pre\|post` | Run structural validity checks |
 | `python olo.py run ID` | Benchmark and gate a candidate |
+| `python olo.py probe ID` | Save an exploratory trial without promotion or attempt charge |
+| `python olo.py recombine --base ID --donor ID --contribution "ID::idea" --hypothesis TEXT` | Allocate a combination with recorded donors |
 | `python olo.py discard ID --reason TEXT` | Reject and clean a candidate |
 | `python olo.py scratchpad` | Show shared research state |
-| `python olo.py frontier` | Rank committed branch leaves |
+| `python olo.py frontier` | Rank approved ancestors and retained task specialists |
+| `python olo.py learn ID --text TEXT --tag TOPIC` | Save an evidence-linked hypothesis or observation |
+| `python olo.py proposal update ID --status claimed` | Track proposal lifecycle |
 | `python olo.py traces ID [TASK]` | Inspect per-task evidence |
 | `python olo.py mode start [--bounded]` | Start bounded or autonomous optimization |
 | `python olo.py round start/close` | Track round improvement and stalls |
 | `python olo.py dashboard --background` | Start or reuse the dashboard |
 | `python olo.py report --output FILE` | Generate a Markdown report |
+| `python olo.py finalize` | Evaluate an approved winner once on the final set and close tuning |
+| `python olo.py evaluation new --version LABEL --from ID` | Archive evidence and start a fresh measurement version |
 | `python olo.py doctor` | Check the local setup |
+
+## Evidence and Acceptance
+
+Configure numeric rules before measuring the baseline with `init` or
+`explore configure`: `--min-improvement` (default 0.01), optional
+`--min-relative-improvement`, repeated `--critical-task`, and
+`--max-task-regression` (default zero). A candidate must meet both gain floors
+to count as progress; any protected task loss beyond tolerance blocks approval.
+Task IDs must match the approved baseline. Gates and independent review remain
+required. Valid ties, small gains, and trade-offs can be approved as `retained`
+specialists without replacing the declared best.
+
+Use `--score-ceiling` for a known maximum/minimum and `--max-evaluations` for a
+run cap. Round `width * budget` bounds actual evaluations, including probes and
+checks. Blocked setup checks cost no evaluation attempts. Generated Python
+caches are excluded from scope checks and experiment snapshots.
+
+The baseline freezes a named `--evaluation-version` and hashes of measurement
+settings/protected files in `.olo/measurement.json`. A new harder benchmark
+requires `evaluation new`; stop the dashboard first. Previous evidence remains
+under `.olo-history/`. Old and new scores are not directly comparable.
+
+Configure a distinct `--final-test "<command>"` before baseline measurement.
+Routine runs never invoke it. `finalize` uses an approved, unchanged snapshot
+once, saves final evidence, and closes optimization even if the command fails.
+Reserve fresh final questions for the next version. This local workflow does
+not enforce data-access isolation or prove that final questions were unread.
+
+Use `recombine` to retain a Git base plus donor IDs, commit hashes, and explicit
+contributions. Optional `--take "ID:relative/path"` copies a whole editable
+file; it does not merge semantics. Outcomes compare per-task changes against
+the base and donors. Record incompatibilities with `learn`; use `--supersedes`
+to correct an older lesson. Verification chatter is excluded from research
+context, and retrieval can be scoped with `scratchpad --parent ID --query TEXT`.
+
+Every round close and mode stop writes `.olo/report.md`: goal, explored
+directions, approvals, rejected ideas, task trade-offs, source contributions,
+rounds, measured cost, final-test status, and evidence links. The dashboard's
+**Run summary** button displays sanitized Markdown and offers a download.
+Experiment details include every saved probe, check, evaluation, and discard.
 
 ## Automated tests
 
@@ -393,11 +443,17 @@ Important safeguards:
 - benchmark construction happens in `exp_0000`, not `main`;
 - descendant experiments cannot edit protected measurement paths;
 - benchmark failures never become successful scores;
-- strict improvement and passing gates are required for a commit;
+- meaningful gain, passing gates, and binding review are required for promotion;
+- measured snapshots and measurement settings are fingerprinted;
+- invalidated parents and donors exclude dependent results;
 - experimenter handoffs must contain structured experiment records;
 - autonomous stop-hook continuations are capped.
 
 Hooks are workflow guardrails, not a complete security sandbox.
+
+Dashboard assets are bundled locally. Rebuild them only when changing the
+renderer or icons: `npm ci --prefix src/olo/web/vendor` followed by
+`npm run sync --prefix src/olo/web/vendor`. Runtime use requires no Node install.
 
 ## Prototype boundary
 

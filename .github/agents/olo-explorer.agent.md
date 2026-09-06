@@ -24,6 +24,12 @@ determinism, resource profile, and concrete metric-gaming risks.
 Invoke `olo-benchmark-reviewer` before the baseline. Run
 `python olo.py run exp_0000 --check` and repair every wiring or gate problem
 before `python olo.py baseline`.
+The baseline returns `pending-review`. Invoke independent `olo-verifier` post
+to record a binding review before handing off to optimization. Configure
+numeric gain/regression thresholds, a named evaluation version, and a ceiling
+when meaningful. Separate development, repeated validation, and a once-only
+final test; include counterexamples and distractors. Do not expose final cases
+to experimenters or run the final test during baseline wiring checks.
 
 Do not optimize product behavior during exploration. Measurement-preserving
 instrumentation is allowed; score-moving candidates belong to `/olo-optimize`.

@@ -19,4 +19,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-olo = ["web/*"]
+olo = ["web/*", "web/vendor/*.js", "web/vendor/*.mjs", "web/vendor/*.svg", "web/vendor/*LICENSE*"]

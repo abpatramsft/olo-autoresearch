@@ -15,10 +15,13 @@
         </span>
         <span>
           <strong>OLO</strong>
-          <small>autoresearch field console</small>
+          <small>Autoresearch console</small>
         </span>
       </a>
       <div class="header-meta">
+        <button id="summary-open" class="command-button" type="button" title="View run summary">
+          <img src="/vendor/file-text.svg" width="18" height="18" alt="">Run summary
+        </button>
         <span id="connection" class="connection">connecting</span>
         <span id="updated-at" class="mono">--:--:--</span>
       </div>
@@ -26,12 +29,12 @@
 
     <section class="run-strip" aria-label="Current run summary">
       <div class="run-identity">
-        <span class="eyebrow">Active search</span>
+        <span id="evaluation-version" class="eyebrow">Evaluation</span>
         <h1 id="project-name">Loading workspace</h1>
         <p id="target-name">Reading Olo state...</p>
       </div>
       <div class="metric-cell">
-        <span>Best score</span>
+        <span>Approved best</span>
         <strong id="best-score">--</strong>
         <small id="best-experiment">no baseline</small>
       </div>
@@ -51,20 +54,20 @@
       <section class="panel constellation-panel">
         <div class="panel-heading">
           <div>
-            <span class="eyebrow">Hypothesis constellation</span>
-            <h2>Score altitude by branch</h2>
+            <span id="metric-direction" class="eyebrow">Experiment lineage</span>
+            <h2>Scores and contributions</h2>
           </div>
           <div class="legend" aria-label="Experiment status legend">
-            <span><i class="dot committed"></i>kept</span>
-            <span><i class="dot evaluated"></i>evaluated</span>
+            <span><i class="dot committed"></i>approved</span>
+            <span><i class="dot retained"></i>retained</span>
+            <span><i class="dot pending-review"></i>review</span>
             <span><i class="dot failed"></i>failed</span>
-            <span><i class="dot active"></i>active</span>
           </div>
         </div>
         <div class="chart-frame">
           <svg id="experiment-chart" role="img" aria-label="Experiment score graph"></svg>
           <div id="chart-empty" class="empty-state">
-            Run a baseline to place the first point on the field.
+            No measured experiments.
           </div>
         </div>
       </section>
@@ -72,7 +75,7 @@
       <aside class="panel frontier-panel">
         <div class="panel-heading compact">
           <div>
-            <span class="eyebrow">Next launch rail</span>
+            <span class="eyebrow">Approved parents</span>
             <h2>Frontier</h2>
           </div>
           <span id="strategy-name" class="strategy-chip">--</span>
@@ -83,10 +86,22 @@
       <section class="panel ledger-panel">
         <div class="panel-heading">
           <div>
-            <span class="eyebrow">Experiment tape</span>
-            <h2>Every attempt, in order</h2>
+            <span class="eyebrow">Research history</span>
+            <h2>Experiments</h2>
           </div>
-          <span class="mono hint">select a row for evidence</span>
+          <div class="ledger-controls">
+            <input id="experiment-search" type="search" placeholder="Search experiments" aria-label="Search experiments">
+            <select id="status-filter" aria-label="Filter experiment status">
+              <option value="">All states</option>
+              <option value="committed">Approved gains</option>
+              <option value="pending-review">Awaiting review</option>
+              <option value="retained">Retained specialists</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+              <option value="invalid">Invalidated</option>
+              <option value="discarded">Discarded</option>
+            </select>
+          </div>
         </div>
         <div class="ledger-wrap">
           <table>
@@ -96,7 +111,8 @@
                 <th>State</th>
                 <th>Score</th>
                 <th>Delta</th>
-                <th>Parent</th>
+                <th>Sources</th>
+                <th>Evidence</th>
                 <th>Hypothesis</th>
               </tr>
             </thead>
@@ -122,7 +138,7 @@
           <div class="panel-heading compact">
             <div>
               <span class="eyebrow">Shared memory</span>
-              <h2>Latest learnings</h2>
+              <h2>Research lessons</h2>
             </div>
           </div>
           <div id="annotation-list" class="note-list"></div>
@@ -131,17 +147,28 @@
     </main>
   </div>
 
-  <dialog id="detail-dialog">
+  <dialog id="detail-dialog" aria-labelledby="detail-title">
     <div class="detail-header">
       <div>
         <span class="eyebrow">Evidence packet</span>
         <h2 id="detail-title">Experiment</h2>
       </div>
-      <button id="detail-close" type="button" aria-label="Close experiment details">Close</button>
+      <button id="detail-close" class="icon-button" type="button" aria-label="Close experiment details" title="Close experiment details"><img src="/vendor/x.svg" width="20" height="20" alt=""></button>
     </div>
     <div id="detail-body" class="detail-body"></div>
   </dialog>
 
-  <script src="/app.js"></script>
+  <dialog id="summary-dialog" aria-labelledby="summary-title">
+    <div class="detail-header">
+      <div><span id="summary-state" class="eyebrow">Research report</span><h2 id="summary-title">Run summary</h2></div>
+      <div class="dialog-actions">
+        <a id="summary-download" class="icon-button" href="/api/report.md" download="olo-summary.md" aria-label="Download Markdown summary" title="Download Markdown summary"><img src="/vendor/download.svg" width="20" height="20" alt=""></a>
+        <button id="summary-close" class="icon-button" type="button" aria-label="Close run summary" title="Close run summary"><img src="/vendor/x.svg" width="20" height="20" alt=""></button>
+      </div>
+    </div>
+    <article id="summary-content" class="summary-content" aria-live="polite"></article>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

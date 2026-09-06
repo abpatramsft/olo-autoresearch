@@ -8,8 +8,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from .frontier import rank_frontier
+from .reporting import build_report
+from .research import eligible_nodes
 from .state import StateStore
-from .utils import tail_text
+from .utils import read_json, tail_text
 
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -38,6 +40,9 @@ def dashboard_state(store: StateStore) -> dict:
         "graph": graph,
         "frontier": rank_frontier(graph, config),
         "annotations": store.annotations()[-100:],
+        "learnings": store.learning_context(limit=20),
+        "eligible_ids": [node["id"] for node in eligible_nodes(graph)],
+        "final_test": read_json(store.state_dir / "final-test/outcome.json", None),
         "proposals": store.proposals()[-100:],
         "events": store.events()[-100:],
         "round_history": (store.meta().get("round_history") or [])[-50:],
@@ -51,16 +56,27 @@ def experiment_detail(store: StateStore, exp_id: str) -> dict:
         raise KeyError(exp_id)
     outcome = store.latest_outcome(exp_id)
     attempt = int(node.get("attempts") or 0)
-    attempt_dir = store.attempt_dir(exp_id, attempt) if attempt else None
+    attempt_dir = store.state_dir / outcome["artifact_dir"] if outcome and outcome.get("artifact_dir") else store.attempt_dir(exp_id, attempt) if attempt else None
+    discarded = store.experiment_dir(exp_id) / "discard/diff.patch"
+    records = []
+    directory = store.experiment_dir(exp_id)
+    for record in sorted([*directory.glob("*/*/outcome.json"), *directory.glob("checks/*/check.json"), *directory.glob("discard/outcome.json")]):
+        value = read_json(record, {})
+        records.append({
+            "path": record.relative_to(store.state_dir).as_posix(), "kind": record.relative_to(directory).parts[0],
+            "status": value.get("status"), "score": value.get("score"), "created_at": value.get("created_at"),
+            "artifacts": [path.relative_to(store.state_dir).as_posix() for path in sorted(record.parent.rglob("*")) if path.is_file()],
+        })
     return {
         "node": node,
         "outcome": outcome,
+        "records": records,
         "annotations": [
             item
             for item in store.annotations()
             if item.get("experiment_id") == exp_id
         ],
-        "diff": tail_text(attempt_dir / "diff.patch") if attempt_dir else "",
+        "diff": tail_text(discarded) if discarded.exists() else tail_text(attempt_dir / "diff.patch") if attempt_dir else "",
         "benchmark_stdout": (
             tail_text(attempt_dir / "benchmark.stdout.log") if attempt_dir else ""
         ),
@@ -79,6 +95,8 @@ def make_handler(store: StateStore):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -100,6 +118,24 @@ def make_handler(store: StateStore):
                 if path == "/api/state":
                     self._json(200, dashboard_state(store))
                     return
+                if path == "/api/measurement":
+                    self._json(200, read_json(store.state_dir / "measurement.json", {}))
+                    return
+                if path in {"/api/report", "/api/report.md"}:
+                    report = build_report(store)
+                    if path.endswith(".md"):
+                        self._send(200, report.encode("utf-8"), "text/markdown; charset=utf-8")
+                    else:
+                        self._json(200, {"markdown": report, "path": ".olo/report.md", "phase": store.config().get("phase")})
+                    return
+                if path.startswith("/api/artifact/"):
+                    relative = Path(path[len("/api/artifact/"):])
+                    artifact = (store.state_dir / relative).resolve()
+                    if relative.is_absolute() or not relative.parts or relative.parts[0] not in {"experiments", "final-test"} or not artifact.is_relative_to(store.state_dir.resolve()) or not artifact.is_file() or artifact.suffix not in {".json", ".log", ".patch"}:
+                        self._json(404, {"error": "unknown evidence file"})
+                        return
+                    self._send(200, artifact.read_bytes(), "text/plain; charset=utf-8")
+                    return
                 if path.startswith("/api/experiment/"):
                     exp_id = path.rsplit("/", 1)[-1]
                     self._json(200, experiment_detail(store, exp_id))
@@ -108,11 +144,11 @@ def make_handler(store: StateStore):
                     asset = WEB_DIR / "index.html"
                 else:
                     name = path.lstrip("/")
-                    if name not in {"app.js", "style.css"}:
+                    if name not in {"app.js", "style.css", "vendor/marked.esm.js", "vendor/purify.es.mjs", "vendor/file-text.svg", "vendor/download.svg", "vendor/x.svg"}:
                         self._json(404, {"error": "not found"})
                         return
                     asset = WEB_DIR / name
-                content_type = mimetypes.guess_type(asset.name)[0] or "text/plain"
+                content_type = "application/javascript; charset=utf-8" if asset.suffix in {".js", ".mjs"} else mimetypes.guess_type(asset.name)[0] or "text/plain"
                 self._send(200, asset.read_bytes(), content_type)
             except KeyError:
                 self._json(404, {"error": "unknown experiment"})

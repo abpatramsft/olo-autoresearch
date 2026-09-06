@@ -63,6 +63,17 @@ def verify_experiment(
         parent_is_root = node.get("parent") == "root"
         baseline_setup = parent_is_root and node.get("kind") == "baseline"
 
+        from .measurement import measurement_snapshot
+        from .utils import read_json
+
+        manifest = read_json(store.state_dir / "measurement.json", {})
+        if manifest and worktree.exists() and measurement_snapshot(config, worktree)["digest"] != manifest.get("digest"):
+            findings.append({
+                "severity": "block", "category": "measurement-version",
+                "what": "measurement settings or protected files differ from the frozen baseline",
+                "where": "measurement.json", "fix": "start a new evaluation version before changing measurement",
+            })
+
         if not worktree.exists():
             findings.append(
                 {
@@ -171,7 +182,7 @@ def verify_experiment(
                         "severity": "warn",
                         "category": "instrumentation",
                         "what": "benchmark emitted no per-task traces",
-                        "where": str(store.traces_dir(exp_id, int(outcome["attempt"]))),
+                        "where": str(outcome.get("artifact_dir") or store.experiment_dir(exp_id)),
                         "fix": "write one JSON trace per evaluated item to OLO_TRACES_DIR",
                     }
                 )

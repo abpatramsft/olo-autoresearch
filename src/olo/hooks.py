@@ -33,13 +33,15 @@ def _session_start(store: StateStore) -> dict[str, Any]:
             )
         }
     status = store.status_summary()
+    if status.get("phase") == "finalized":
+        return {"additionalContext": "This Olo evaluation is finalized. Read .olo/report.md; do not tune on the final-test answers. Start a new evaluation version with fresh final questions to continue."}
     if status.get("phase") != "ready-to-optimize":
         return {
             "additionalContext": (
                 f"Olo is in exploration phase `{status.get('phase')}` with discovery "
                 f"status `{status.get('discovery_status')}`. Use /olo-explore and "
                 "`python olo.py explore status`; do not start optimization until "
-                "exp_0000 is committed."
+                "exp_0000 is measured and approved with `python olo.py review`."
             )
         }
     return {
@@ -60,9 +62,11 @@ def _pre_tool_use(store: StateStore, payload: dict[str, Any]) -> dict[str, Any]:
     if tool not in {"edit", "create", "apply_patch", "write"}:
         return {}
     args_text = _normalized_text(_tool_args(payload))
+    config = store.config()
+    if config.get("phase") == "finalized":
+        return {"permissionDecision": "deny", "permissionDecisionReason": "The final-test result has been exposed. This evaluation is closed to tuning; start a new evaluation version with fresh final questions."}
     if ".olo/worktrees/" in args_text:
         return {}
-    config = store.config()
     phase = config.get("phase")
     if phase != "ready-to-optimize":
         store.add_event("exploration_main_edit_blocked", tool=tool, phase=phase)
@@ -104,12 +108,13 @@ def _post_tool_use(store: StateStore, payload: dict[str, Any]) -> dict[str, Any]
     if tool not in {"bash", "powershell"}:
         return {}
     command = _normalized_text(_tool_args(payload))
-    if "olo.py run" in command or "benchmark" in command:
+    if "olo.py run" in command or "olo.py probe" in command or "benchmark" in command:
         return {
             "additionalContext": (
                 "After an Olo run, read `python olo.py show <exp_id>` and "
                 "`python olo.py scratchpad`; decide from the recorded score, gates, "
                 "traces, and verification rather than from console output alone."
+                " A pending-review snapshot is not a winner or parent until an independent reviewer records `python olo.py review`. Use `probe` for every exploratory measurement."
             )
         }
     return {}
@@ -148,7 +153,7 @@ def _subagent_start(payload: dict[str, Any]) -> dict[str, Any]:
             "additionalContext": (
                 "Keep main clean. Prepare exp_0000 first, then create benchmark, "
                 "fixtures, instrumentation, and gates only inside that baseline "
-                "worktree. Finish only after the checked baseline is committed."
+                "worktree. Finish only after the measured baseline is independently approved with `python olo.py review`."
             )
         }
     if name == "olo-experimenter":
@@ -162,8 +167,8 @@ def _subagent_start(payload: dict[str, Any]) -> dict[str, Any]:
     if name == "olo-verifier":
         return {
             "additionalContext": (
-                "Remain read-only. Treat benchmark or gate modification, test leakage, "
-                "scope escape, and skipped evaluation as blocking findings."
+                "Do not edit candidate source. Treat benchmark or gate modification, test leakage, "
+                "scope escape, and skipped evaluation as blocking findings. After post-review, record a binding approve/reject verdict using `python olo.py review`, not just a prose annotation."
             )
         }
     return {}
@@ -178,7 +183,7 @@ def _subagent_stop(payload: dict[str, Any]) -> dict[str, Any]:
     )
     has_exp = re.search(r"\bexp_\d{4,}\b", response) is not None
     has_status = re.search(
-        r'"status"\s*:\s*"(committed|evaluated|failed|discarded)"',
+        r'"status"\s*:\s*"(committed|retained|pending-review|probed|probe-failed|blocked|invalid|evaluated|failed|discarded)"',
         response,
     )
     if has_exp and has_status:

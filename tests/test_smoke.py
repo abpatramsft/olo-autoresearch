@@ -133,9 +133,10 @@ class SmokeTests(unittest.TestCase):
                 "--no-dashboard",
             )
             baseline = json.loads(cli(repo, "baseline").stdout)
-            self.assertEqual(baseline["status"], "committed")
+            self.assertEqual(baseline["status"], "pending-review")
             self.assertAlmostEqual(baseline["score"], 0.6)
             self.assertEqual(baseline["trace_count"], 5)
+            cli(repo, "review", "exp_0000", "--verdict", "approve", "--reviewer", "test", "--reason", "Baseline evidence checked.")
 
             created = json.loads(
                 cli(
@@ -155,28 +156,25 @@ class SmokeTests(unittest.TestCase):
                 FIXED_AGENT,
                 encoding="utf-8",
             )
+            tampering = json.loads(
+                cli(
+                    repo, "new", "--parent", "exp_0000", "--hypothesis",
+                    "In agent.py, return all expected policy decisions while rewriting the protected benchmark during module import.",
+                ).stdout
+            )
             improved = json.loads(cli(repo, "run", created["experiment_id"]).stdout)
-            self.assertEqual(improved["status"], "committed")
+            self.assertEqual(improved["status"], "pending-review")
             self.assertAlmostEqual(improved["score"], 1.0)
             self.assertTrue(improved["gates_passed"])
+            cli(repo, "review", created["experiment_id"], "--verdict", "approve", "--reviewer", "test", "--reason", "Candidate evidence checked.")
 
             status = json.loads(cli(repo, "status", "--json").stdout)
             self.assertEqual(status["best_experiment"], "exp_0001")
             self.assertAlmostEqual(status["best_score"], 1.0)
 
-            tampering = json.loads(
-                cli(
-                    repo,
-                    "new",
-                    "--parent",
-                    "exp_0000",
-                    "--hypothesis",
-                    (
-                        "In agent.py, return all expected policy decisions while "
-                        "rewriting the protected benchmark during module import."
-                    ),
-                ).stdout
-            )
+            saturated = cli(repo, "new", "--parent", "exp_0000", "--hypothesis", "Do not allocate after saturation.", check=False)
+            self.assertNotEqual(saturated.returncode, 0)
+            self.assertIn("ceiling", saturated.stderr)
             tampering_worktree = Path(tampering["worktree"])
             (
                 tampering_worktree
@@ -238,6 +236,18 @@ class SmokeTests(unittest.TestCase):
                 self.assertIsNotNone(state)
                 self.assertEqual(state["status"]["best_experiment"], "exp_0001")
                 self.assertEqual(len(state["graph"]["nodes"]), 4)
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/report", timeout=2) as response:
+                    report = json.loads(response.read().decode("utf-8"))
+                self.assertIn("What Was Explored", report["markdown"])
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/report.md", timeout=2) as response:
+                    self.assertIn("text/markdown", response.headers["Content-Type"])
+                    self.assertIn(b"Final Test", response.read())
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/artifact/experiments/exp_0000/attempts/001/outcome.json", timeout=2) as response:
+                    self.assertEqual(json.loads(response.read())["status"], "committed")
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/api/artifact/%2e%2e/config.json", timeout=2)
+                self.assertEqual(rejected.exception.code, 404)
+                rejected.exception.close()
             finally:
                 process.terminate()
                 process.wait(timeout=5)

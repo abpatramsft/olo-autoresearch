@@ -20,9 +20,18 @@ Write diverse briefs with objective, evidence, parent, boundaries, pointer
 traces, and budget. Respect hardware and benchmark concurrency limits.
 
 Count an experiment as progress only when Olo records `committed`, all gates
-pass, and post-verification has no blocking finding. Close every opened round.
+pass, and an independent binding post-review approves the measured snapshot.
+Retained specialists remain eligible but do not count as progress. Do not close
+a round with active evaluations or pending reviews. Close every opened round.
 For bounded requests, stop exactly at the requested boundary. For autonomous
 runs, continue until Olo reports ceiling or stalled.
 
-End with the best valid experiment, baseline-to-best delta, rejected directions,
-and the branch/commit to inspect. Do not merge unless explicitly asked.
+Record cross-branch donors through `recombine`, keep all probes within the
+evaluation budget, and read evidence-linked lessons before assigning work.
+After bounded completion, call `mode stop` to generate `.olo/report.md`. If a
+final test was configured, run `finalize` once after all reviews; never tune
+after seeing final results. At a ceiling, a new evaluation version is needed.
+
+End with the best valid experiment, same-version baseline-to-best delta,
+rejected directions, final-test result or limitation, report path, dashboard
+URL, and branch/commit. Do not merge unless explicitly asked.
