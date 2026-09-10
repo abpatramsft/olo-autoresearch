@@ -121,12 +121,12 @@ class BaselineRecoveryTests(unittest.TestCase):
                 "The target could return a constant.",
             )
 
-            first_failure = cli(repo, "baseline", check=False)
-            second_failure = cli(repo, "baseline", check=False)
+            first_failure = cli(repo, "run", "exp_0000", "--check", check=False)
+            second_failure = cli(repo, "run", "exp_0000", "--check", check=False)
             self.assertEqual(first_failure.returncode, 1)
             self.assertEqual(second_failure.returncode, 1)
             failed_node = json.loads(cli(repo, "show", "exp_0000").stdout)["node"]
-            self.assertEqual(failed_node["attempts"], 2)
+            self.assertEqual(failed_node["attempts"], 0)
 
             (worktree / "benchmark.py").write_text(
                 '''from __future__ import annotations
@@ -150,9 +150,11 @@ print(json.dumps(result))
 ''',
                 encoding="utf-8",
             )
+            cli(repo, "run", "exp_0000", "--check")
+            cli(repo, "run", "exp_0000", "--check")
             recovered = json.loads(cli(repo, "baseline").stdout)
             self.assertEqual(recovered["status"], "pending-review")
-            self.assertEqual(recovered["attempt"], 3)
+            self.assertEqual(recovered["attempt"], 1)
             cli(repo, "review", "exp_0000", "--verdict", "approve", "--reviewer", "test", "--reason", "Recovered baseline evidence checked.")
             self.assertEqual(
                 json.loads(cli(repo, "status", "--json").stdout)["phase"],

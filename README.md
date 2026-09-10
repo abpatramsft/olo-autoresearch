@@ -10,6 +10,7 @@ two-phase process inspired by Evo:
   -> prepare exp_0000
   -> construct or instrument benchmarks and gates
   -> audit and check the harness
+  -> assess repeatability, trace integrity, and useful headroom
   -> commit the measured baseline
 
 /olo-optimize
@@ -142,9 +143,10 @@ The explorer:
 6. creates benchmark and gate files only in the returned worktree;
 7. configures target, metric, editable scope, and protected paths;
 8. invokes `olo-benchmark-reviewer`;
-9. runs `python olo.py run exp_0000 --check`;
-10. measures the baseline with `python olo.py baseline`;
-11. obtains an independent binding approval with `python olo.py review`.
+9. repeats `python olo.py run exp_0000 --check` on unchanged files;
+10. requires `python olo.py explore assess` to confirm usable measurement;
+11. measures the baseline with `python olo.py baseline`;
+12. obtains an independent binding approval with `python olo.py review`.
 
 Confirm:
 
@@ -245,11 +247,16 @@ configure:
 python olo.py explore configure --target src/parser.py --editable src/parser.py --protect benchmarks/parser_benchmark.py --protect benchmarks/parser_gate.py --benchmark "python benchmarks/parser_benchmark.py --target {target}" --benchmark-origin constructed --gate "held-out::python benchmarks/parser_gate.py --target {target}" --metric max --unit "parser corpus case" --determinism deterministic --resource-profile "CPU-light isolated process; start width 1" --meaningful-improvement "At least one additional case passing" --repo-summary "Parser library for structured input" --gaming-risk "The target could special-case visible benchmark strings"
 ```
 
-Run a non-committing wiring check:
+Run two non-committing checks for a deterministic benchmark, then assess:
 
 ```powershell
 python olo.py run exp_0000 --check
+python olo.py run exp_0000 --check
+python olo.py explore assess
 ```
+
+Use three checks for `noisy` or `temp-zero` benchmarks. Fix all blocking
+assessment findings before freezing the baseline.
 
 Measure the baseline, then have an independent reviewer approve the saved evidence:
 
@@ -271,6 +278,51 @@ Benchmark origins:
 | `existing` | Already emits the Olo score and trace contract |
 | `wrapped` | Existing tests or eval are adapted to emit Olo evidence |
 | `constructed` | New cases and scoring logic are created |
+
+## Discovery should find something worth improving
+
+Start with the product's entry points and existing tests, not a recursive read
+of generated files, Olo's kit, or old experiment worktrees. An all-green demo
+is usually a useful regression gate, not a useful optimization objective.
+Choose a concrete weakness, include positive controls and hard counterexamples,
+and establish real headroom before spending candidate evaluations.
+
+New `explore configure` workspaces enforce a checked-baseline readiness policy.
+`explore assess` records its findings in `.olo/discovery.json`, the scratchpad,
+and the run summary. It checks:
+
+- the latest checks match the current source and measurement settings;
+- at least two deterministic checks, or three noisy/temp-zero checks, pass;
+- deterministic task scores agree, not just the aggregate;
+- observed noisy score variation is below the meaningful-gain floor;
+- explicit task evidence exists and a known ceiling leaves room for a useful gain.
+
+Changing source, fixtures, commands, or thresholds requires fresh checks.
+`baseline` and `run exp_0000` enforce the same policy before consuming an
+evaluation; deterministic baseline measurement must also match its checks.
+Benchmark and gate execution must not mutate the measured source, including
+during baseline setup; build or generate fixtures before running the checks.
+Small task sets and missing final tests remain explicit warnings, not hidden
+claims of coverage. These diagnostic samples are **not statistical confidence
+or production proof**. Existing saved configurations and the direct `init`
+compatibility path are not silently migrated to the new policy.
+
+Noisy candidate reviews additionally need unchanged controls or paired,
+interleaved comparisons. Baseline calibration cannot rule out machine-load
+drift later in the run, and shared speedups on untouched paths are not evidence
+that the edit caused the improvement.
+
+For Python commands, run Olo using the environment with the target dependencies
+and configure `{python}` rather than assuming a bare `python` will find it:
+
+```powershell
+python olo.py explore configure ... --benchmark "{python} benchmark.py" --gate "regression::{python} gate.py" --final-test "{python} final_test.py"
+```
+
+The placeholder is replaced by the quoted configuring interpreter in all three
+commands. A repository-local virtual environment is not copied into experiment
+worktrees, so relative paths such as `.venv\Scripts\python.exe` are not portable
+between the root and those worktrees.
 
 ## Benchmark contract
 
@@ -296,6 +348,13 @@ The benchmark produces:
 }
 ```
 
+The result file is authoritative when present. Malformed results or non-finite
+task scores fail explicitly instead of falling back to a favorable stdout score
+or silently dropping a task. Every reported task requires exactly one JSON
+trace with the same finite score. This applies to checks, candidates, probes,
+and final testing; legacy aggregate-only output remains supported by direct
+initialization.
+
 ## Benchmark versus gate
 
 | Benchmark | Gate |
@@ -307,6 +366,13 @@ The benchmark produces:
 
 A constructed benchmark must have at least one real gate.
 
+Each gate receives separate result and trace destinations under
+`gates/<index>-<name>/` in its evidence directory. Gate logs live there too, and
+`gate_results[].artifact_dir` identifies the location. A validation command can
+reuse a benchmark script without overwriting development results or traces.
+Audit constructed scorers and gates against obviously incorrect empty/all-answer
+outputs; merely printing a good-looking score must not pass a gate.
+
 ## Control-plane commands
 
 | Command | Purpose |
@@ -317,6 +383,7 @@ A constructed benchmark must have at least one real gate.
 | `python olo.py baseline --prepare` | Create the editable `exp_0000` worktree |
 | `python olo.py explore configure` | Save target, benchmark, gates, metric, and project notes |
 | `python olo.py run exp_0000 --check` | Validate real benchmark/gate wiring without committing or consuming an attempt |
+| `python olo.py explore assess` | Check baseline freshness, repeatability, task evidence, and useful headroom |
 | `python olo.py baseline` | Save the measured baseline as pending review |
 | `python olo.py review ID --verdict approve --reviewer NAME --reason TEXT` | Bind approval to the measured source and configuration |
 | `python olo.py invalidate ID --reviewer NAME --reason TEXT` | Invalidate a source and its dependent lineage |
@@ -398,6 +465,8 @@ The suite covers:
 - dashboard API behavior.
 - recovery after discarded or repeatedly failed baselines;
 - rejection of benchmark files modified at candidate runtime.
+- source-bound readiness, deterministic task consistency, noisy gain floors, and ceiling headroom;
+- result/trace consistency, isolated gate evidence, and pinned Python commands.
 
 Browser check:
 

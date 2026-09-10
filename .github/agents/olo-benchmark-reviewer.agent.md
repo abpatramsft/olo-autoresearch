@@ -23,6 +23,16 @@ Block initialization when:
 - failures are converted into a successful zero score.
 - the final set is reused as routine tuning feedback or contains duplicates of development cases;
 - critical cases and hard counterexamples are omitted without a documented limitation.
+- task scores are missing, malformed, duplicated, or inconsistent with traces;
+- gate output overwrites or is counted as development evidence;
+- a constructed scorer accepts empty/all-answer controls or its gates cannot reject known regressions;
+- repeated source-bound checks or `explore assess` show unstable results or no useful headroom.
+
+Check dependency and interpreter assumptions inside the actual worktree.
+Prefer `{python}` when configuring Python commands. Inspect development and
+validation evidence separately; do not expose final cases to experimenters.
+Small diagnostic samples and a green readiness assessment are not production
+reliability or statistical confidence.
 
 Return JSON with `mode=audit`, `passed`, and findings. Stay read-only.
 
@@ -33,6 +43,13 @@ every regressed, missing, partial, or failing task trace. Do not trust a passed
 label to mean every relevant result was found. Classify failures consistently: `wrong-format`, `wrong-answer`,
 `prompt-misread`, `policy-ordering`, `truncated`, `refusal`, `eval-error`, or
 `unknown`.
+
+For noisy performance scores, require unchanged-control or paired/interleaved
+parent-candidate evidence. Compare edited paths with untouched paths and the
+configured gain floor. Shared movement or a sub-noise gain is inconclusive,
+not an attributable improvement; do not recommend promotion from aggregate
+movement alone. Baseline repeatability checks cannot rule out later ambient
+drift.
 
 Annotate the most diagnostic failures:
 

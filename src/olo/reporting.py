@@ -51,6 +51,20 @@ def build_report(store) -> str:
     ]
     for gate in config.get("gates") or []:
         lines.append(f"- Gate {_text(gate.get('name'))}: `{_text(gate.get('command'))}`")
+    assessment = store.discovery().get("baseline_assessment")
+    if assessment:
+        lines.extend([
+            "", "## Exploration Readiness", "",
+            f"Last assessment: **{_text(assessment.get('status'))}** at {_text(assessment.get('assessed_at'))}.",
+            f"Matching checks: {assessment.get('matching_checks', 0)}; required: {assessment.get('required_checks')}. "
+            f"Task count: {assessment.get('task_count', 0)}. Observed score range: {_text(assessment.get('observed_score_range'))}.",
+            f"Remaining headroom: {_text(assessment.get('remaining_headroom'))}; minimum useful gain: {_text(assessment.get('minimum_gain'))}.",
+            "Checks are bound to the source and measurement settings. Repeatability samples are diagnostic, not statistical or production proof.",
+        ])
+        for finding in assessment.get("findings") or []:
+            lines.append(f"- **{_text(finding.get('severity'))}: {_text(finding.get('category'))}**. {_text(finding.get('what'))} {_text(finding.get('fix'))}")
+        for path in assessment.get("check_records") or []:
+            lines.append(f"- [Readiness evidence]({path})")
     lines.extend(["", "## What Was Explored", ""])
     for dimension in store.discovery().get("dimensions") or []:
         lines.append(f"- Dimension **{_text(dimension.get('name'))}**: {_text(dimension.get('description'))}")

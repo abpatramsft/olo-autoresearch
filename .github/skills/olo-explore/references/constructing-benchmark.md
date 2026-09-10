@@ -26,6 +26,18 @@ good and obviously bad.
 For performance, warm up first and aggregate multiple samples. Do not optimize
 from one noisy timing.
 
+For noisy performance goals, include an unchanged control path or paired,
+interleaved parent/candidate samples in the measurement design. An equal speedup
+on untouched work suggests ambient drift, not an attributable candidate gain.
+Record the control results and the noise floor; minimum-of-many timing alone
+does not remove this confounder.
+
+Include both positive controls and hard negative cases. Exercise the scorer and
+gates with obviously wrong outputs, such as empty results or every possible
+answer, and require rejection. Keep these calibration checks in harness tests,
+not product edits. Distinct wording alone does not make a held-out set
+independent: separate identities, examples, and relevant failure cases.
+
 ## Emit Olo evidence
 
 The harness must:
@@ -35,6 +47,12 @@ The harness must:
 - write one diagnostic trace per item;
 - exit nonzero on infrastructure failure;
 - avoid swallowing partial failures as a zero score.
+
+Malformed task scores are errors, not entries to omit. Every task score must
+have exactly one corresponding JSON trace with the same score. Gate commands
+receive separate result and trace paths; do not mix validation traces into the
+development result. Use `{python}` in Python commands to bind the interpreter
+and its installed dependencies when configuring the harness.
 
 ## Goodhart audit
 
@@ -66,3 +84,10 @@ The gate must exit nonzero when it detects a regression.
 When `python olo.py baseline` succeeds, all benchmark files in `exp_0000` are
 committed to `olo/exp_0000`. Descendant experiment branches inherit the same
 measurement system while `main` remains clean.
+
+Before freezing, run two unchanged deterministic checks (three for noisy or
+temp-zero runs) and `python olo.py explore assess`. A changed source or harness
+invalidates earlier checks. An already-saturated benchmark, unstable task
+scores, or an improvement threshold smaller than observed noise needs repair,
+not an optimization round. A deterministic baseline measurement must also
+match its checked result.

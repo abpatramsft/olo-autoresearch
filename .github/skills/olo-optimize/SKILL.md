@@ -27,6 +27,9 @@ Use the experiment protocol at
 6. Use approved frontier nodes as parents, including historical ancestors and
   retained task specialists. Never use a pending or invalidated source.
 7. Respect the binding resource when choosing width.
+8. For noisy performance goals, require paired or unchanged-control evidence
+   before promotion. A faster untouched control suggests machine-load drift;
+   baseline calibration alone does not establish an attributable candidate gain.
 
 ## Start
 

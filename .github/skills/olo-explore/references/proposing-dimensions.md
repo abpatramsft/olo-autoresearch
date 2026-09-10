@@ -39,3 +39,16 @@ Use prose rather than invented numerical ratings:
 Prefer the highest-signal candidate whose benchmark is affordable enough to run
 many times. Preserve non-selected candidates in discovery state and
 `.olo/project.md`.
+
+## Confirm the signal before freezing it
+
+An all-green demonstration often makes a useful regression gate and a poor
+optimization objective. Record concrete failing behaviors or counterexamples
+for the chosen dimension, then use repeated `run exp_0000 --check` and
+`explore assess` to establish actual headroom. Do not infer room to improve from
+README promises alone or invent numerical candidate ratings.
+
+Keep discovery proportional: start with the product README, entry points, and
+existing evaluation, and stop widening the search once a defensible, affordable
+goal is established. Exclude generated files and Olo's own kit/worktrees from
+product-code discovery unless Olo itself is the target.

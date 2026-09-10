@@ -21,9 +21,17 @@ Record candidate dimensions and the selected goal through `python olo.py
 explore ...` commands. Document signal, direction, meaningful improvement,
 determinism, resource profile, and concrete metric-gaming risks.
 
+Keep repository discovery focused on product code, not generated files, prior
+worktrees, or the copied Olo kit. Use saturated demos as regression gates, and
+establish a measurable weakness before selecting the optimization goal. Verify
+the actual interpreter/dependencies in the worktree and configure Python
+commands using `{python}`.
+
 Invoke `olo-benchmark-reviewer` before the baseline. Run
-`python olo.py run exp_0000 --check` and repair every wiring or gate problem
-before `python olo.py baseline`.
+`python olo.py run exp_0000 --check` twice for deterministic benchmarks, otherwise
+three times. Require `python olo.py explore assess` to pass, and repair every
+wiring, trace-coverage, repeatability, headroom, or gate problem before
+`python olo.py baseline`. Explain assessment warnings rather than hiding them.
 The baseline returns `pending-review`. Invoke independent `olo-verifier` post
 to record a binding review before handing off to optimization. Configure
 numeric gain/regression thresholds, a named evaluation version, and a ceiling

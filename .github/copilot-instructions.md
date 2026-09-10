@@ -3,6 +3,11 @@
 - `.olo/` and `.olo-history/` are local experiment evidence and must not be committed.
 - Use `/olo-explore` first on a fresh repository. It owns goal selection and
   creation of the checked `exp_0000` baseline.
+- Use repeatable, source-bound checks and `explore assess` before freezing a
+  newly configured exploration baseline. A saturated demo belongs in a gate,
+  not as an optimization objective.
+- Prefer `{python}` in Python benchmark, gate, and final-test commands; it is
+  bound to the configuring interpreter, including its environment.
 - Use `/olo-optimize` only after Olo reports `phase=ready-to-optimize`.
 - Benchmark, gate, fixture, and scorer files created by exploration belong in
   the `exp_0000` worktree, not on `main`.
