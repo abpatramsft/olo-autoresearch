@@ -35,6 +35,12 @@ def main() -> None:
         assert page.locator(".experiment-node").count() == sum(node.get("score") is not None for name, node in state["graph"]["nodes"].items() if name != "root")
         assert page.locator("#summary-open").count() == 1, "Missing run-summary button"
         assert page.locator("#experiment-search").count() == 1, "Missing experiment filter"
+        branch_paths = page.locator(".branch-line").evaluate_all(
+            "paths => paths.map(path => path.getAttribute('d'))"
+        )
+        assert all(" C " not in path and " H " in path and " V " in path for path in branch_paths), (
+            "Experiment lineage must use straight step segments"
+        )
 
         page.locator("#experiment-search").fill("exp_0000")
         assert page.locator("#experiment-ledger tr").count() == 1
@@ -50,6 +56,10 @@ def main() -> None:
         page.wait_for_selector("#summary-dialog[open] #summary-content h2")
         assert "What Was Explored" in page.locator("#summary-content").inner_text()
         assert "Final Test" in page.locator("#summary-content").inner_text()
+        assert page.locator("#summary-content .summary-table-wrap").count() >= 1
+        assert page.locator("#summary-content th").evaluate_all(
+            "headers => headers.every(header => getComputedStyle(header).whiteSpace === 'nowrap' && header.getBoundingClientRect().height <= 56)"
+        ), "Run-summary table headings are cramped"
         with page.expect_download() as download_info:
             page.locator("#summary-download").click()
         assert download_info.value.suggested_filename.endswith(".md")
@@ -72,6 +82,9 @@ def main() -> None:
             page.locator("#summary-open").click()
             page.wait_for_selector("#summary-dialog[open] #summary-content h2")
             assert page.locator("#summary-dialog").evaluate("element => element.scrollWidth <= element.clientWidth + 1"), "Report dialog overflows"
+            assert page.locator("#summary-content .summary-table-wrap").first.evaluate(
+                "element => element.scrollWidth >= element.clientWidth"
+            ), "Report table does not retain a readable data-grid width"
             page.screenshot(path=str(screenshot.with_name(f"{screenshot.stem}-summary-{width}.png")), full_page=True)
             page.locator("#summary-close").click()
 

@@ -113,6 +113,37 @@ function svgElement(name, attrs = {}) {
   return element;
 }
 
+function experimentStepPath(parentPoint, point) {
+  return `M ${parentPoint.x} ${parentPoint.y} H ${point.x} V ${point.y}`;
+}
+
+function enhanceSummaryTables(container) {
+  for (const table of container.querySelectorAll("table")) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "summary-table-wrap";
+    wrapper.tabIndex = 0;
+    wrapper.setAttribute("role", "region");
+    wrapper.setAttribute("aria-label", "Scrollable report table");
+
+    const headers = [...table.querySelectorAll("thead th")];
+    headers.forEach((header, index) => {
+      const column = header.textContent
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || `column-${index + 1}`;
+      header.scope = "col";
+      header.dataset.column = column;
+      for (const row of table.querySelectorAll("tbody tr")) {
+        if (row.children[index]) row.children[index].dataset.column = column;
+      }
+    });
+
+    table.before(wrapper);
+    wrapper.append(table);
+  }
+}
+
 function renderChart(data) {
   const nodesById = data.graph.nodes || {};
   const nodes = Object.values(nodesById)
@@ -179,9 +210,8 @@ function renderChart(data) {
     const parentPoint = pointById[node.parent];
     const point = pointById[node.id];
     if (!parentPoint) return;
-    const control = (parentPoint.x + point.x) / 2;
     const edge = svgElement("path", {
-      d: `M ${parentPoint.x} ${parentPoint.y} C ${control} ${parentPoint.y}, ${control} ${point.y}, ${point.x} ${point.y}`,
+      d: experimentStepPath(parentPoint, point),
       class: `branch-line ${pathIds.has(node.id) ? "best" : ""}`,
     });
     ui.chart.append(edge);
@@ -203,7 +233,7 @@ function renderChart(data) {
       tabindex: "0",
       "aria-label": `${node.id}, score ${formatScore(node.score)}, ${node.status}`,
     });
-    group.append(svgElement("circle", { cx: point.x, cy: point.y, r: 8 }));
+    group.append(svgElement("circle", { cx: point.x, cy: point.y, r: 7 }));
     const tooltip = svgElement("title");
     tooltip.textContent = `${node.id}: ${stateLabel(node.status)}. ${node.hypothesis}`;
     group.append(tooltip);
@@ -415,6 +445,7 @@ async function openSummary() {
       RETURN_DOM_FRAGMENT: true, FORBID_TAGS: ["img", "style", "iframe", "form"], FORBID_ATTR: ["style"],
     });
     ui.summaryContent.replaceChildren(content);
+    enhanceSummaryTables(ui.summaryContent);
     for (const link of ui.summaryContent.querySelectorAll("a")) {
       const path = link.getAttribute("href") || "";
       if (path.startsWith("experiments/") || path.startsWith("final-test/")) link.href = `/api/artifact/${path.split("/").map(encodeURIComponent).join("/")}`;

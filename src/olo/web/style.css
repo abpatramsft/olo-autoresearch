@@ -342,9 +342,7 @@ main {
   position: relative;
   min-height: 310px;
   overflow: auto;
-  background:
-    linear-gradient(120deg, transparent 0 62%, rgba(36, 87, 214, 0.055) 62% 78%, transparent 78%),
-    rgba(237, 243, 247, 0.45);
+  background: rgba(249, 252, 255, 0.72);
 }
 
 #experiment-chart {
@@ -354,8 +352,9 @@ main {
 }
 
 .axis-line {
-  stroke: var(--grid-strong);
+  stroke: var(--grid);
   stroke-width: 1;
+  shape-rendering: crispEdges;
 }
 
 .axis-label {
@@ -367,12 +366,15 @@ main {
 .branch-line {
   fill: none;
   stroke: var(--grid-strong);
-  stroke-width: 1.5;
+  stroke-width: 1.25;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
 }
 
 .branch-line.best {
   stroke: var(--cobalt);
-  stroke-width: 3;
+  stroke-width: 2.25;
 }
 
 .experiment-node {
@@ -381,7 +383,7 @@ main {
 
 .experiment-node circle {
   stroke: var(--white);
-  stroke-width: 3;
+  stroke-width: 2;
   transition: transform 160ms ease, stroke-width 160ms ease;
   transform-box: fill-box;
   transform-origin: center;
@@ -389,8 +391,8 @@ main {
 
 .experiment-node:hover circle,
 .experiment-node:focus circle {
-  transform: scale(1.25);
-  stroke-width: 4;
+  transform: scale(1.18);
+  stroke-width: 3;
 }
 
 .experiment-node text {
@@ -794,11 +796,53 @@ details { padding: 10px 0; border-bottom: 1px solid var(--grid); font-size: 12px
 summary { cursor: pointer; line-height: 1.6; }
 .artifact-list { padding-left: 20px; }
 .artifact-list a, .summary-content a { color: var(--cobalt); overflow-wrap: anywhere; }
+#summary-dialog { width: min(1240px, calc(100vw - 32px)); }
 .summary-content { min-height: 0; padding: 20px 28px 36px; overflow: auto; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .summary-content h1 { font-family: var(--display); font-size: 25px; line-height: 1.25; }
 .summary-content h2 { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--grid); font-size: 18px; }
-.summary-content table { min-width: 0; display: block; overflow: auto; max-width: 100%; font-size: 12px; }
-.summary-content th { position: static; }
+.summary-content > p,
+.summary-content > ul,
+.summary-content > ol { max-width: 86ch; }
+.summary-table-wrap {
+  max-width: 100%;
+  margin: 16px 0 24px;
+  overflow-x: auto;
+  border: 1px solid var(--grid-strong);
+  background: var(--white);
+  scrollbar-gutter: stable;
+}
+.summary-table-wrap:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 3px; }
+.summary-content table {
+  display: table;
+  width: 100%;
+  min-width: 1080px;
+  max-width: none;
+  table-layout: fixed;
+  font-size: 12px;
+}
+.summary-content th,
+.summary-content td {
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.summary-content th {
+  position: static;
+  white-space: nowrap;
+}
+.summary-content th[data-column="experiment"],
+.summary-content td[data-column="experiment"] { width: 112px; white-space: nowrap; }
+.summary-content th[data-column="sources"],
+.summary-content td[data-column="sources"] { width: 160px; }
+.summary-content th[data-column="operator"],
+.summary-content td[data-column="operator"] { width: 108px; white-space: nowrap; }
+.summary-content th[data-column="status"],
+.summary-content td[data-column="status"] { width: 120px; white-space: nowrap; }
+.summary-content th[data-column="score"],
+.summary-content td[data-column="score"] { width: 96px; white-space: nowrap; }
+.summary-content th[data-column="hypothesis"],
+.summary-content td[data-column="hypothesis"] { width: auto; line-height: 1.55; }
+.summary-content tbody tr:nth-child(even) { background: rgba(219, 229, 255, 0.28); }
 .summary-content li { margin: 8px 0; }
 .summary-content code { font-family: var(--mono); font-size: 0.85em; }
 .summary-content tbody tr { cursor: default; }
