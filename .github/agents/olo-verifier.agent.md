@@ -32,7 +32,21 @@ Post:
 - unexplained score movement outside the hypothesis prediction.
 - missing task IDs, critical regressions, or a changed measurement manifest;
 - inaccurate full-success claims when raw relevance traces show partial coverage;
-- donor interactions that silently lose a base or donor's useful behavior.
+- donor interactions that silently lose a base or donor's useful behavior;
+- avoidable changes to existing input support, case/locale handling, API
+  semantics, or defaults that the narrow benchmark does not cover.
+
+A narrower optimization metric does not narrow the product's existing
+contract. Inspect changed code for collateral restrictions even at a perfect
+score. When practical, use a focused, read-only compatibility assertion against
+the approved parent and candidate, without editing the frozen harness or
+reading final cases. Record the assertion and result in the review reason.
+Do not waive an unintended regression merely because it lies outside the
+benchmark; deliberate trade-offs require an explicit measurement policy.
+
+Reject a defective measured snapshot and retain its evidence. Repairs require
+a fresh candidate from an approved parent and an explicitly bounded evaluation,
+not edits to the already-measured source or an unrecorded replacement score.
 
 Do not modify source or run training. Record the verdict:
 

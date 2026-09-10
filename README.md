@@ -312,6 +312,11 @@ interleaved comparisons. Baseline calibration cannot rule out machine-load
 drift later in the run, and shared speedups on untouched paths are not evidence
 that the edit caused the improvement.
 
+A focused benchmark does not narrow the product's existing contract. Independent
+review also checks for avoidable compatibility regressions outside the scored
+slice. Reject defective snapshots and measure repairs as new, budgeted candidates;
+never replace a measured source or silently reuse its old score.
+
 For Python commands, run Olo using the environment with the target dependencies
 and configure `{python}` rather than assuming a bare `python` will find it:
 

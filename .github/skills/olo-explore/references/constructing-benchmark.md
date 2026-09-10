@@ -38,6 +38,12 @@ answer, and require rejection. Keep these calibration checks in harness tests,
 not product edits. Distinct wording alone does not make a held-out set
 independent: separate identities, examples, and relevant failure cases.
 
+Document existing input and API support separately from the chosen objective.
+A benchmark deliberately limited to one language, input class, or workload is
+not permission to remove behavior outside that slice. Preserve cheap existing
+compatibility checks as gates, and have independent review look for collateral
+restrictions that a perfect narrow score would miss.
+
 ## Emit Olo evidence
 
 The harness must:
