@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f5f7fb">
+    <meta name="theme-color" content="#f3f5f4">
     <title>Olo — Better code. Evidence first.</title>
     <meta name="description" content="A local autoresearch system for GitHub Copilot CLI. Explore your repository, run isolated experiments, and keep independently reviewed improvements.">
     <link rel="canonical" href="https://abpatramsft.github.io/olo-autoresearch/">
@@ -14,9 +14,6 @@
     <meta property="og:url" content="https://abpatramsft.github.io/olo-autoresearch/">
     <meta name="twitter:card" content="summary">
     <link rel="icon" href="assets/olo.svg" type="image/svg+xml">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="app.js" defer></script>
   </head>
@@ -25,7 +22,7 @@
     <header class="site-header">
       <div class="shell header-inner">
         <a class="brand" href="./" aria-label="Olo home">
-          <span class="wordmark" aria-hidden="true">olo<span class="brand-dot">.</span></span>
+          <span class="wordmark" aria-hidden="true">OLO</span>
           <span class="brand-caption">AUTORESEARCH<br>FOR COPILOT</span>
         </a>
         <nav class="navigation" aria-label="Main navigation">
@@ -59,45 +56,75 @@
             <span class="eyebrow">THE EXPERIMENT WORKBENCH</span>
             <span class="workbench-label"><span aria-hidden="true">⑂</span> main stays yours</span>
           </div>
-          <div class="experiment-tree" role="group" aria-label="Illustrative experiment outcomes">
-            <svg class="tree-lines" viewBox="0 0 560 340" preserveAspectRatio="none" fill="none" aria-hidden="true">
-              <path class="tree-path" d="M120 170H225V61H392"/>
-              <path class="tree-path" d="M120 170H392"/>
-              <path class="tree-path tree-path-approved" d="M120 170H225V279H392"/>
-              <circle cx="225" cy="170" r="5" class="tree-junction"/>
-            </svg>
-            <span class="tree-annotation">one baseline.<br>different directions.</span>
-            <button class="experiment-node node-baseline" type="button" data-experiment="baseline" aria-pressed="false" aria-controls="experiment-detail" disabled>
-              <span class="node-symbol" aria-hidden="true">○</span>
-              <span class="node-name">exp_0000</span>
-              <span class="node-caption">Checked baseline</span>
-            </button>
-            <button class="experiment-node node-rejected" type="button" data-experiment="rejected" aria-pressed="false" aria-controls="experiment-detail" disabled>
-              <span class="node-symbol" aria-hidden="true">×</span>
-              <span class="node-name">exp_0001</span>
-              <span class="node-caption">Gate failed</span>
-            </button>
-            <button class="experiment-node node-retained" type="button" data-experiment="retained" aria-pressed="false" aria-controls="experiment-detail" disabled>
-              <span class="node-symbol" aria-hidden="true">◇</span>
-              <span class="node-name">exp_0002</span>
-              <span class="node-caption">Specialist retained</span>
-            </button>
-            <button class="experiment-node node-approved" type="button" data-experiment="approved" aria-pressed="true" aria-controls="experiment-detail" disabled>
-              <span class="node-symbol" aria-hidden="true">✓</span>
-              <span class="node-name">exp_0003</span>
-              <span class="node-caption">Improvement approved</span>
-            </button>
+          <div class="study-strip" aria-label="Illustrative study size">
+            <span><strong>8</strong> experiments</span>
+            <span><strong>3</strong> rounds</span>
+            <span><strong>1</strong> recombination</span>
           </div>
+          <div class="chart-heading"><h2>Scores &amp; contributions</h2><span>ILLUSTRATIVE SCORE ↑</span></div>
+          <div class="graph-viewport" tabindex="0" role="region" aria-label="Experiment graph. Scroll horizontally on smaller screens." aria-describedby="graph-description">
+            <div class="experiment-tree" role="group" aria-label="Eight illustrative experiments across three rounds">
+              <svg class="tree-lines" viewBox="0 0 600 360" preserveAspectRatio="none" fill="none" aria-hidden="true">
+                <g class="chart-grid">
+                  <path d="M30 74H578M30 174H578M30 274H578"/>
+                  <text x="5" y="78">.9</text><text x="5" y="178">.7</text><text x="5" y="278">.5</text>
+                </g>
+                <path class="tree-link best-line" data-from="baseline" data-to="approved" d="M58 254H138V164H205"/>
+                <path class="tree-link" data-from="baseline" data-to="retained" d="M58 254H114V244H205"/>
+                <path class="tree-link" data-from="baseline" data-to="rejected" d="M58 254H128V309H205"/>
+                <path class="tree-link best-line" data-from="approved" data-to="refined" d="M205 164H286V89H367"/>
+                <path class="tree-link" data-from="retained" data-to="donor" d="M205 244H306V179H367"/>
+                <path class="tree-link" data-from="approved" data-to="regressed" d="M205 164H268V264H367"/>
+                <path class="tree-link best-line" data-from="refined" data-to="combined" d="M367 89H455V54H537"/>
+                <path class="tree-link donor-line" data-from="donor" data-to="combined" d="M367 179L537 54"/>
+              </svg>
+              <div class="round-labels" aria-hidden="true"><span>BASELINE</span><span>ROUND 1</span><span>ROUND 2</span><span>ROUND 3</span></div>
+              <button class="experiment-node node-baseline" type="button" data-experiment="baseline" aria-label="exp_0000, checked baseline, illustrative score 0.54" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0000</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.54</span>
+              </button>
+              <button class="experiment-node node-approved" type="button" data-experiment="approved" aria-label="exp_0001, approved improvement, illustrative score 0.72" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0001</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.72</span>
+              </button>
+              <button class="experiment-node node-retained" type="button" data-experiment="retained" aria-label="exp_0002, retained specialist, illustrative score 0.56" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0002</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.56</span>
+              </button>
+              <button class="experiment-node node-rejected node-failed" type="button" data-experiment="rejected" aria-label="exp_0003, gate failed, illustrative score 0.43" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0003</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.43</span>
+              </button>
+              <button class="experiment-node node-refined" type="button" data-experiment="refined" aria-label="exp_0004, approved follow-up to exp_0001, illustrative score 0.87" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0004</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.87</span>
+              </button>
+              <button class="experiment-node node-donor" type="button" data-experiment="donor" aria-label="exp_0005, approved follow-up to exp_0002 and donor to exp_0007, illustrative score 0.69" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0005</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.69</span>
+              </button>
+              <button class="experiment-node node-regressed node-failed" type="button" data-experiment="regressed" aria-label="exp_0006, gate failed, illustrative score 0.52" aria-pressed="false" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0006</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.52</span>
+              </button>
+              <button class="experiment-node node-combined" type="button" data-experiment="combined" aria-label="exp_0007, approved recombination of base exp_0004 and donor exp_0005, illustrative score 0.94" aria-pressed="true" aria-controls="experiment-detail" disabled>
+                <span class="node-name">0007</span><span class="node-dot" aria-hidden="true"></span><span class="node-score">0.94</span>
+              </button>
+            </div>
+          </div>
+          <div class="graph-key" aria-label="Graph legend">
+            <span><i class="key-dot" aria-hidden="true"></i>Approved</span>
+            <span><i class="key-dot key-retained" aria-hidden="true"></i>Retained</span>
+            <span><i class="key-dot key-failed" aria-hidden="true">×</i>Gate failed</span>
+            <span><i class="key-line" aria-hidden="true"></i>Best lineage</span>
+            <span><i class="key-line key-donor" aria-hidden="true"></i>Donor</span>
+          </div>
+          <p class="graph-description" id="graph-description">Branch in parallel. Extend promising experiments. Recombine ideas and measure again.</p>
+          <p class="graph-scroll-hint">Scroll the graph to follow every branch <span aria-hidden="true">↔</span></p>
           <div class="experiment-detail" id="experiment-detail" aria-live="polite" aria-atomic="true">
             <div class="detail-heading">
-              <span class="detail-id" id="detail-id">exp_0003</span>
-              <span class="detail-status" id="detail-status">APPROVED</span>
+              <span class="detail-id" id="detail-id">exp_0007</span>
+              <span class="detail-status" id="detail-status">APPROVED RECOMBINATION</span>
             </div>
-            <h2 id="detail-title">A better score is only the start.</h2>
-            <p id="detail-description">The change clears the gain threshold, passes its gates, and earns independent approval. Now it can become a parent.</p>
-            <div class="evidence-stamps" id="detail-checks"><span>Measured gain</span><span>Gates passed</span><span>Reviewed</span></div>
+            <h2 id="detail-title">Two promising branches. One new experiment.</h2>
+            <p class="detail-sources" id="detail-sources">Base: exp_0004 · Donor: exp_0005</p>
+            <p id="detail-description">Keep the base's improvement and transfer a compatible idea from the donor. Remeasure the combination, pass the gates, and earn a new independent review. Nothing merges into main.</p>
+            <div class="evidence-stamps" id="detail-checks"><span>Sources recorded</span><span>Combination measured</span><span>Reviewed</span></div>
           </div>
-          <p class="workbench-caption"><span class="interactive-hint" hidden>Select a node to inspect its outcome.</span> Illustrative run, not benchmark results.</p>
+          <p class="workbench-caption"><span class="interactive-hint" hidden>Select a node to trace its parents and donors.</span> Illustrative run, not benchmark results.</p>
         </div>
       </section>
 
@@ -240,7 +267,7 @@ copilot --agent=olo-explorer</code></pre>
     </main>
 
     <footer class="site-footer shell">
-      <div class="footer-brand"><a class="wordmark" href="./" aria-label="Olo home">olo<span class="brand-dot">.</span></a><p>Better code. Evidence first.</p></div>
+      <div class="footer-brand"><a class="wordmark" href="./" aria-label="Olo home">OLO</a><p>Better code. Evidence first.</p></div>
       <div class="footer-links"><a href="https://github.com/abpatramsft/olo-autoresearch">GitHub ↗</a><a href="https://github.com/abpatramsft/olo-autoresearch/blob/main/docs/guide.md">Documentation ↗</a><a href="https://github.com/abpatramsft/olo-autoresearch/blob/main/docs/contributing.md">Contributing ↗</a></div>
       <p class="attribution">Loosely inspired by <a href="https://github.com/evo-hq/evo">Evo</a>. Independently built for GitHub Copilot CLI. Not affiliated with GitHub or Evo.</p>
     </footer>

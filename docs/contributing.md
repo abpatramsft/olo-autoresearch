@@ -52,11 +52,17 @@ python -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
 Open `http://127.0.0.1:8000`. Stop the foreground server with Ctrl+C.
-Google Fonts enhance the typography; local fallbacks keep the page usable
-without them. There are no analytics or live experiment-data requests.
+The typography uses the dashboard's local system-font stacks: Bahnschrift for
+display, Segoe UI for body text, and Cascadia Mono for data, with platform
+fallbacks. No font downloads, analytics, or live experiment-data requests occur.
 
-The experiment tree is an **illustration**, not a live dashboard or claimed
-benchmark result. Keep that distinction visible when editing the copy.
+The experiment graph is an **illustration**, not a live dashboard or claimed
+benchmark result. Its eight invented experiments show parallel branches,
+follow-up rounds, a retained specialist, failed gates, and a remeasured
+combination with an explicit base and donor. Solid stepped paths show parent
+lineage; the dashed path records the donor contribution. Selecting a node
+highlights its source lineage. Keep the illustrative label visible and never
+copy private local run data into this page.
 The tree controls and copy buttons are progressive enhancements; the workflow
 and setup instructions remain readable without JavaScript.
 
