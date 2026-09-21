@@ -66,6 +66,8 @@ def measurement_snapshot(config: dict[str, Any], worktree: Path) -> dict[str, An
         "protected_paths", "editable_paths", "final_test", "min_improvement",
         "min_relative_improvement", "critical_tasks", "max_task_regression", "score_ceiling",
     )
+    if "require_baseline_checks" in config:
+        fields += ("require_baseline_checks", "benchmark_determinism")
     settings = {name: config.get(name) for name in fields}
     files = {}
     for name in config.get("protected_paths") or []:
@@ -91,6 +93,7 @@ def finalize(store, exp_id: str | None = None) -> dict[str, Any]:
     from .reporting import save_report
     from .research import eligible_nodes, fingerprint
     from .runner import _run_shell, fill_command, parse_benchmark_result
+    from .verification import task_trace_errors
 
     directory = store.state_dir / "final-test"
     with FileLock(store.state_dir / "final-test.lock", timeout=0.2, stale_after=86400):
@@ -144,6 +147,9 @@ def finalize(store, exp_id: str | None = None) -> dict[str, Any]:
             if fingerprint(worktree) != before:
                 raise RuntimeError("final-test command changed the approved snapshot")
             result = parse_benchmark_result(result_path, execution["stdout"])
+            trace_errors = task_trace_errors(traces, result.get("tasks") or {})
+            if trace_errors:
+                raise RuntimeError("final-test task evidence is invalid: " + "; ".join(trace_errors))
             record.update(status="completed", score=result["score"], tasks=result.get("tasks"), result=result)
         except (RuntimeError, ValueError) as exc:
             record.update(status="failed", error=str(exc))

@@ -681,6 +681,15 @@ class StateStore:
             "```",
         ]
         discovery = self.discovery()
+        assessment = discovery.get("baseline_assessment")
+        if assessment:
+            lines.extend([
+                "", "## Exploration Readiness",
+                f"- status={assessment.get('status')} checked_tasks={assessment.get('task_count')} "
+                f"headroom={assessment.get('remaining_headroom')} minimum_gain={assessment.get('minimum_gain')}",
+            ])
+            for finding in assessment.get("findings") or []:
+                lines.append(f"- {finding.get('severity')}: {finding.get('what')} {finding.get('fix')}")
         if status["phase"] != "ready-to-optimize":
             lines.extend(
                 [

@@ -27,7 +27,7 @@ from .gitops import (
     repo_root,
 )
 from .hooks import handle_hook
-from .runner import run_experiment
+from .runner import bind_python, run_experiment
 from .state import StateStore
 from .utils import FileLock, atomic_write_json, is_pid_running, read_json, utc_now
 from .verification import verify_experiment
@@ -60,8 +60,8 @@ def _normalize_relative_to(base: Path, raw: str) -> str:
 def _parse_gate(raw: str, index: int) -> dict[str, str]:
     if "::" in raw:
         name, command = raw.split("::", 1)
-        return {"name": name.strip() or f"gate-{index}", "command": command.strip()}
-    return {"name": f"gate-{index}", "command": raw.strip()}
+        return {"name": name.strip() or f"gate-{index}", "command": bind_python(command.strip())}
+    return {"name": f"gate-{index}", "command": bind_python(raw.strip())}
 
 
 def _policy_settings(args: argparse.Namespace) -> dict[str, Any]:
@@ -74,6 +74,8 @@ def _policy_settings(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"{name} must be finite and nonnegative")
         if name == "max_evaluations" and value < 1:
             raise ValueError("max_evaluations must be positive")
+        if name == "final_test":
+            value = bind_python(value)
         settings[name] = value
     if getattr(args, "score_ceiling", None) is not None and not math.isfinite(args.score_ceiling):
         raise ValueError("score_ceiling must be finite")
@@ -290,6 +292,12 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
             }
         )
         return 0
+    if args.explore_command == "assess":
+        from .discovery import assess_baseline
+
+        assessment = assess_baseline(store, persist=True)
+        _json(assessment)
+        return 0 if assessment["passed"] else 1
     if args.explore_command == "add-dimension":
         target = args.target.replace("\\", "/")
         entry = store.add_dimension(
@@ -349,6 +357,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
     gates = [_parse_gate(raw, i + 1) for i, raw in enumerate(args.gate or [])]
     if args.benchmark_origin == "constructed" and not gates:
         raise RuntimeError("a constructed benchmark requires at least one real gate")
+    benchmark = bind_python(args.benchmark)
 
     config = store.config()
     config.update(
@@ -357,7 +366,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
             "target": target,
             "editable_paths": editable,
             "protected_paths": protected,
-            "benchmark": args.benchmark,
+            "benchmark": benchmark,
             "benchmark_origin": args.benchmark_origin,
             "metric": args.metric,
             "gates": gates,
@@ -365,6 +374,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
             "benchmark_determinism": args.determinism,
             "resource_profile": args.resource_profile,
             "meaningful_improvement": args.meaningful_improvement,
+            "require_baseline_checks": True,
         }
     )
     config.update(_policy_settings(args))
@@ -411,7 +421,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
         discovery["repo_summary"] = args.repo_summary
         discovery["benchmark_plan"] = {
             "origin": args.benchmark_origin,
-            "command": args.benchmark,
+            "command": benchmark,
             "unit": args.unit,
             "metric": args.metric,
             "determinism": args.determinism,
@@ -445,7 +455,7 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
         "## Benchmark",
         "",
         f"- Origin: {args.benchmark_origin}",
-        f"- Command: `{args.benchmark}`",
+        f"- Command: `{benchmark}`",
         f"- Unit: {args.unit}",
         f"- Direction: {args.metric}",
         f"- Meaningful improvement: {args.meaningful_improvement}",
@@ -476,12 +486,13 @@ def cmd_explore(args: argparse.Namespace, store: StateStore) -> int:
         {
             "phase": "ready-for-baseline",
             "target": target,
-            "benchmark": args.benchmark,
+            "benchmark": benchmark,
             "gates": gates,
             "protected_paths": protected,
             "next": (
-                "Run `python olo.py run exp_0000 --check`, audit with "
-                "olo-benchmark-reviewer, then run `python olo.py baseline`."
+                "Audit with olo-benchmark-reviewer, repeat `python olo.py run "
+                "exp_0000 --check` (twice for deterministic benchmarks, otherwise "
+                "three times), then run `python olo.py explore assess` before baseline."
             ),
         }
     )
@@ -510,7 +521,7 @@ def cmd_init(args: argparse.Namespace, root: Path) -> int:
     store.initialize(
         project_name=args.name or root.name,
         target=target,
-        benchmark=args.benchmark,
+        benchmark=bind_python(args.benchmark),
         metric=args.metric,
         gates=gates,
         root_commit=head_commit(root),
@@ -1030,6 +1041,7 @@ def build_parser() -> argparse.ArgumentParser:
     explore_init.add_argument("--no-dashboard", action="store_true")
     explore_init.add_argument("--port", type=int, default=8765)
     explore_sub.add_parser("status")
+    explore_sub.add_parser("assess")
 
     add_dimension = explore_sub.add_parser("add-dimension")
     add_dimension.add_argument("--name", required=True)

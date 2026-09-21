@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+import math
 import statistics
 from pathlib import Path
 from typing import Any
 
 from .gitops import changed_files
 from .state import StateStore
+from .utils import finite_number
 
 
 def _normalized(path: str) -> str:
@@ -36,6 +39,50 @@ def _generated_artifact(path: str) -> bool:
     ):
         return True
     return normalized.endswith((".pyc", ".pyo"))
+
+
+def task_trace_errors(directory: Path, tasks: dict[str, float]) -> list[str]:
+    if not tasks:
+        return []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for path in sorted(directory.glob("*.json")):
+        try:
+            trace = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(trace, dict):
+                raise ValueError("trace must be an object")
+            task_id = trace.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                raise ValueError("trace must identify its task")
+            if task_id in seen:
+                errors.append(f"{path.name}: duplicate task {task_id!r}")
+            seen.add(task_id)
+            if task_id not in tasks:
+                errors.append(f"{path.name}: unexpected task {task_id!r}")
+            elif not math.isclose(
+                finite_number(trace.get("score")), tasks[task_id], rel_tol=1e-9, abs_tol=1e-12
+            ):
+                errors.append(f"{path.name}: score disagrees with task {task_id!r}")
+            events = trace.get("events") or []
+            if not isinstance(events, list):
+                raise ValueError("trace events must be an array")
+            for event in events:
+                if not isinstance(event, dict):
+                    raise ValueError("trace events must be objects")
+                attributes = event.get("attributes") or {}
+                if not isinstance(attributes, dict):
+                    raise ValueError("trace event attributes must be an object")
+                if "gold" in attributes and "ranked_top" in attributes:
+                    for name in ("gold", "ranked_top"):
+                        if not isinstance(attributes[name], list):
+                            raise ValueError(f"trace {name} must be an array of identifiers")
+                        set(attributes[name])
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append(f"{path.name}: {exc}")
+    missing = sorted(set(tasks) - seen)
+    if missing:
+        errors.append("missing task traces: " + ", ".join(missing))
+    return errors
 
 
 def verify_experiment(
@@ -140,6 +187,31 @@ def verify_experiment(
             )
         else:
             baseline_setup = node.get("kind") == "baseline"
+            if outcome.get("source_fingerprint") and outcome["source_fingerprint"] != outcome.get("fingerprint"):
+                findings.append(
+                    {
+                        "severity": "block",
+                        "category": "runtime-source-mutation",
+                        "what": "benchmark or gates changed source files while measuring them",
+                        "where": str(outcome.get("artifact_dir") or exp_id),
+                        "fix": "prepare build artifacts before measurement and write evidence only to the supplied output paths",
+                    }
+                )
+            tasks = ((outcome.get("benchmark") or {}).get("result") or {}).get("tasks") or {}
+            artifact_dir = outcome.get("artifact_dir")
+            trace_errors = task_trace_errors(
+                store.state_dir / artifact_dir / "traces", tasks
+            ) if artifact_dir else (["task evidence directory is missing"] if tasks else [])
+            if trace_errors:
+                findings.append(
+                    {
+                        "severity": "block",
+                        "category": "task-evidence",
+                        "what": "; ".join(trace_errors),
+                        "where": str(artifact_dir or exp_id),
+                        "fix": "emit exactly one trace per task with the same finite score; keep gate evidence separate",
+                    }
+                )
             protected = list(config.get("protected_paths") or [])
             editable = list(config.get("editable_paths") or [config.get("target")])
             if not baseline_setup:

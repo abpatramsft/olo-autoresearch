@@ -40,6 +40,9 @@ Use `python olo.py` on Windows and the available Python 3 launcher elsewhere.
   just paraphrases of visible cases. Keep development, reusable validation,
   and an untouched final test distinct. A perfect tiny benchmark is a ceiling,
   not evidence of production reliability.
+9. A passing command is not enough: task scores and traces must agree, repeated
+   checks must match the current source/configuration, and useful headroom must
+   remain. Require `explore assess` before baseline measurement.
 
 ## 1. Initialize exploration
 
@@ -70,6 +73,12 @@ in place or mix results from different versions.
 Read the README, entry points, package manifests, tests, examples, profiling
 code, TODO/FIXME comments, and existing evaluation scripts.
 
+Start narrowly with product entry points and existing tests. Do not recursively
+read `.olo` worktrees, archives, generated files, or the copied Olo kit as if they
+were product code. Inspect saved evidence only for a specific research question.
+Prefer one clear goal or at most three evidence-backed alternatives over a long
+speculative ranking.
+
 Identify:
 
 - what the product actually does;
@@ -78,6 +87,11 @@ Identify:
 - unmeasured areas with plausible slack;
 - behaviors that must never regress;
 - benchmark runtime and resource constraints.
+
+Check which Python interpreter and dependencies actually work inside the
+baseline worktree. A repository-local virtual environment is not copied by Git.
+Invoke Olo with the intended interpreter and use `{python}` in configured
+commands to pin that interpreter; do not assume a bare `python` resolves to it.
 
 Read `references/proposing-dimensions.md`.
 
@@ -105,6 +119,11 @@ python olo.py explore select --name "<short-id>"
 In interactive use, present genuinely ambiguous dimensions to the user once.
 In unattended use, select the recommended dimension and preserve alternatives
 as future candidates.
+
+Treat an existing all-green demo or tiny golden set as a regression gate first.
+Look for diagnostic failures and representative negative controls before
+declaring it the optimization objective. A plausible weakness is a hypothesis,
+not measured headroom; the checked baseline must establish that distinction.
 
 ## 3. Prepare the baseline worktree
 
@@ -179,7 +198,7 @@ python olo.py explore configure \
   --editable "<target-or-source-root>" \
   --protect "<benchmark-file>" \
   --protect "<gate-or-held-out-file>" \
-  --benchmark "<benchmark command>" \
+  --benchmark "{python} <benchmark script and arguments>" \
   --benchmark-origin <existing|wrapped|constructed> \
   --gate "<name>::<real pass/fail command>" \
   --metric <max|min> \
@@ -225,14 +244,17 @@ It must check:
 
 Address every blocking finding and re-run the audit.
 
-## 8. Run a non-committing wiring check
+## 8. Check repeatability and useful headroom
 
 ```text
 python olo.py run exp_0000 --check
+python olo.py run exp_0000 --check
+python olo.py explore assess
 ```
 
-This runs the real benchmark and gates, writes evidence under
-`.olo/experiments/exp_0000/checks/`, and does not consume an attempt or commit
+For `noisy` or `temp-zero` benchmarks, run a third check before assessment.
+These run the real benchmark and gates, write evidence under
+`.olo/experiments/exp_0000/checks/`, and do not consume an attempt or commit
 the worktree.
 
 Require:
@@ -240,7 +262,22 @@ Require:
 - status `check-passed`;
 - finite score;
 - all gates pass;
-- expected task traces exist.
+- every task has exactly one trace with the same finite score;
+- assessment reports `passed=true`.
+
+Fresh `explore configure` workspaces cannot freeze a baseline without this
+assessment, including through `run exp_0000`. Checks are bound to the source and
+measurement settings: edits require fresh checks. Deterministic per-task
+results must agree, noisy score variation must be below the useful-gain floor,
+and the configured ceiling must leave enough room for a meaningful gain.
+These few samples diagnose wiring and obvious noise; they are not statistical
+confidence or proof that the benchmark represents production.
+
+If assessment blocks at the ceiling, choose a useful alternative goal or add
+representative harder cases now, not after optimizing an already-perfect demo.
+Resolve every blocking finding; disclose small benchmark and absent-final-set
+warnings. Gate outputs are saved separately under each check's `gates/`
+directory and must never be counted as development traces.
 
 ## 9. Measure and approve the baseline
 
@@ -274,6 +311,7 @@ Report:
 - target and editable scope;
 - benchmark score meaning and direction;
 - baseline score;
+- readiness evidence, repeatability, remaining headroom, and limitations;
 - gate names;
 - determinism and resource profile;
 - dashboard URL;

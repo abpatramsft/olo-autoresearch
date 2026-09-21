@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -21,13 +22,17 @@ SCORE_RE = re.compile(
 )
 
 
+def bind_python(command: str) -> str:
+    return command.replace("{python}", quote_shell(sys.executable))
+
+
 def fill_command(command: str, worktree: Path, target: Path) -> str:
     values = {
         "{worktree}": quote_shell(worktree),
         "{repo}": quote_shell(worktree),
         "{target}": quote_shell(target),
     }
-    rendered = command
+    rendered = bind_python(command)
     for marker, value in values.items():
         rendered = rendered.replace(marker, value)
     return rendered
@@ -93,32 +98,38 @@ def _run_shell(
     raise RuntimeError("unreachable shell execution state")
 
 
-def parse_benchmark_result(result_path: Path, stdout: str) -> dict[str, Any]:
-    candidates: list[Any] = []
-    if result_path.exists():
-        candidates.append(json.loads(result_path.read_text(encoding="utf-8")))
-    stripped = stdout.strip()
-    if stripped:
+def _validate_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or "score" not in value:
+        raise ValueError("benchmark result must be a JSON object containing a finite `score`")
+    try:
+        score = finite_number(value["score"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("benchmark score must be finite") from exc
+    raw_tasks = value.get("tasks", {})
+    if not isinstance(raw_tasks, dict):
+        raise ValueError("benchmark tasks must be an object of task IDs and finite scores")
+    tasks: dict[str, float] = {}
+    for task_id, task_score in raw_tasks.items():
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("benchmark task IDs must be nonempty strings")
         try:
-            candidates.append(json.loads(stripped))
+            tasks[task_id] = finite_number(task_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"benchmark task {task_id!r} must have a finite score") from exc
+    return {**value, "score": score, "tasks": tasks}
+
+
+def parse_benchmark_result(result_path: Path, stdout: str) -> dict[str, Any]:
+    if result_path.exists():
+        return _validate_result(json.loads(result_path.read_text(encoding="utf-8")))
+    stripped = stdout.strip()
+    for text in [stripped, *reversed(stripped.splitlines())]:
+        try:
+            value = json.loads(text)
         except json.JSONDecodeError:
-            pass
-        for line in reversed(stripped.splitlines()):
-            try:
-                candidates.append(json.loads(line))
-                break
-            except json.JSONDecodeError:
-                continue
-    for value in candidates:
+            continue
         if isinstance(value, dict) and "score" in value:
-            score = finite_number(value["score"])
-            tasks: dict[str, float] = {}
-            for task_id, task_score in (value.get("tasks") or {}).items():
-                try:
-                    tasks[str(task_id)] = finite_number(task_score)
-                except (TypeError, ValueError):
-                    continue
-            return {**value, "score": score, "tasks": tasks}
+            return _validate_result(value)
     match = SCORE_RE.search(stdout)
     if match:
         return {"score": finite_number(match.group(1)), "tasks": {}}
@@ -187,6 +198,16 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
     target = worktree / str(config["target"])
     if not target.exists():
         raise RuntimeError(f"configured target does not exist in worktree: {target}")
+    baseline_assessment = None
+    if node.get("kind") == "baseline" and config.get("require_baseline_checks") and not check and not probe:
+        from .discovery import assess_baseline
+
+        baseline_assessment = assess_baseline(store, persist=True)
+        if not baseline_assessment["passed"]:
+            blockers = "; ".join(
+                item["what"] for item in baseline_assessment["findings"] if item["severity"] == "block"
+            )
+            raise RuntimeError(f"baseline is not ready: {blockers} Run `python olo.py explore assess` for remedies.")
     pre = verify_experiment(store, exp_id, phase="pre", persist=not check)
     if not pre["passed"]:
         preflight = int(node.get("preflight_count", 0)) + 1
@@ -238,6 +259,7 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
         store.add_event("experiment_check_started", experiment_id=exp_id, check=attempt)
 
     benchmark_command = fill_command(str(config["benchmark"]), worktree, target)
+    source_fingerprint = fingerprint(worktree)
     env = os.environ.copy()
     env.update(
         {
@@ -273,25 +295,38 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
     else:
         try:
             result = parse_benchmark_result(result_path, benchmark["stdout"])
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
             benchmark_error = str(exc)
+    if baseline_assessment and result is not None and config.get("benchmark_determinism") == "deterministic":
+        from .discovery import same_result
+
+        if not same_result(baseline_assessment["result"], result):
+            benchmark_error = "deterministic baseline differs from its checked result; repair repeatability and recheck before freezing"
 
     gate_results: list[dict[str, Any]] = []
     if benchmark_error is None:
-        for gate in config.get("gates") or []:
+        for index, gate in enumerate(config.get("gates") or [], 1):
             gate_name = str(gate.get("name") or "gate")
             gate_command = fill_command(str(gate["command"]), worktree, target)
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", gate_name).strip("-") or "gate"
+            gate_dir = attempt_dir / "gates" / f"{index:03d}-{safe_name}"
+            gate_traces = gate_dir / "traces"
+            gate_traces.mkdir(parents=True, exist_ok=True)
+            gate_env = {
+                **env,
+                "OLO_RESULT_PATH": str(gate_dir / "result.json"),
+                "OLO_TRACES_DIR": str(gate_traces),
+            }
             gate_result = _run_shell(
                 gate_command,
                 cwd=worktree,
-                env=env,
+                env=gate_env,
                 timeout=timeout,
             )
-            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", gate_name).strip("-")
-            (attempt_dir / f"gate-{safe_name}.stdout.log").write_text(
+            (gate_dir / "stdout.log").write_text(
                 gate_result["stdout"], encoding="utf-8"
             )
-            (attempt_dir / f"gate-{safe_name}.stderr.log").write_text(
+            (gate_dir / "stderr.log").write_text(
                 gate_result["stderr"], encoding="utf-8"
             )
             gate_results.append(
@@ -303,6 +338,7 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
                     "returncode": gate_result["returncode"],
                     "timed_out": gate_result["timed_out"],
                     "duration_seconds": gate_result["duration_seconds"],
+                    "artifact_dir": str(gate_dir.relative_to(store.state_dir)),
                 }
             )
 
@@ -313,6 +349,7 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
         item["passed"] for item in gate_results
     )
     trace_count = len(list(traces_dir.glob("*.json")))
+    measured_fingerprint = fingerprint(worktree)
     score = None if result is None else float(result["score"])
     if check:
         status = (
@@ -335,7 +372,11 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
             },
             "changed_files": files,
             "trace_count": trace_count,
+            "source_fingerprint": source_fingerprint,
+            "fingerprint": measured_fingerprint,
+            "measurement": measurement_snapshot(config, worktree),
             "duration_seconds": float(benchmark["duration_seconds"]),
+            "total_duration_seconds": float(benchmark["duration_seconds"]) + sum(item["duration_seconds"] for item in gate_results),
             "error": benchmark_error,
             "verification": pre,
             "artifact_dir": str(attempt_dir.relative_to(store.state_dir)),
@@ -399,10 +440,11 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
             for source_id in [node["parent"], *(node.get("donors") or [])]
             if source_id != "root" and result is not None
         },
-        "trace_facts": trace_facts(traces_dir),
+        "trace_facts": [],
         "evaluation_version": config.get("evaluation_version", "legacy"),
         "artifact_dir": str(attempt_dir.relative_to(store.state_dir)),
-        "fingerprint": fingerprint(worktree),
+        "source_fingerprint": source_fingerprint,
+        "fingerprint": measured_fingerprint,
         "measurement": measurement_snapshot(config, worktree),
         "gates_passed": gates_passed,
         "gate_results": gate_results,
@@ -427,6 +469,8 @@ def _execute(store: StateStore, exp_id: str, *, timeout_override: int | None, ch
         persist=True,
         outcome_override=outcome,
     )
+    if post["passed"]:
+        outcome["trace_facts"] = trace_facts(traces_dir)
     if not post["passed"]:
         status = "failed"
         improved = False

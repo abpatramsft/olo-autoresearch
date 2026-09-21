@@ -6,10 +6,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "olo.py"
+sys.path.insert(0, str(ROOT / "src"))
+
+from olo.runner import _run_shell, run_experiment
+from olo.state import StateStore
 
 TARGET = '''def slugify(text: str) -> str:
     return text.lower().replace(" ", "-")
@@ -232,6 +237,9 @@ class ExploreTests(unittest.TestCase):
             self.assertEqual(configured_state["config"]["timeout_seconds"], 901)
             self.assertEqual(configured_state["config"]["max_attempts"], 7)
             self.assertEqual(configured_state["config"]["stall_limit"], 9)
+            unchecked = cli(repo, "baseline", check=False)
+            self.assertNotEqual(unchecked.returncode, 0)
+            self.assertIn("baseline is not ready", unchecked.stderr)
 
             checked = json.loads(cli(repo, "run", "exp_0000", "--check").stdout)
             self.assertEqual(checked["status"], "check-passed")
@@ -240,6 +248,31 @@ class ExploreTests(unittest.TestCase):
             node_after_check = json.loads(cli(repo, "show", "exp_0000").stdout)["node"]
             self.assertEqual(node_after_check["attempts"], 0)
             self.assertEqual(node_after_check["status"], "pending")
+            self.assertNotEqual(cli(repo, "baseline", check=False).returncode, 0)
+            cli(repo, "run", "exp_0000", "--check")
+            assessed = json.loads(cli(repo, "explore", "assess").stdout)
+            self.assertTrue(assessed["passed"])
+            self.assertEqual(assessed["matching_checks"], 2)
+            self.assertAlmostEqual(assessed["remaining_headroom"], 2 / 3)
+            (worktree / "benchmark.py").write_text(BENCHMARK + "\n# changed\n", encoding="utf-8")
+            stale = cli(repo, "run", "exp_0000", check=False)
+            self.assertNotEqual(stale.returncode, 0)
+            self.assertIn("latest check does not match", stale.stderr)
+            (worktree / "benchmark.py").write_text(BENCHMARK, encoding="utf-8")
+
+            def inconsistent_measurement(command: str, **kwargs):
+                execution = _run_shell(command, **kwargs)
+                result_path = Path(kwargs["env"]["OLO_RESULT_PATH"])
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                result["score"] += 0.1
+                result_path.write_text(json.dumps(result), encoding="utf-8")
+                return execution
+
+            with patch("olo.runner._run_shell", side_effect=inconsistent_measurement):
+                inconsistent = run_experiment(StateStore(repo), "exp_0000")
+            self.assertEqual(inconsistent["status"], "failed")
+            self.assertIn("differs from its checked result", inconsistent["error"])
+            self.assertIsNone(inconsistent["commit"])
 
             baseline = json.loads(cli(repo, "baseline").stdout)
             self.assertEqual(baseline["status"], "pending-review")
@@ -248,6 +281,8 @@ class ExploreTests(unittest.TestCase):
             status = json.loads(cli(repo, "status", "--json").stdout)
             self.assertEqual(status["phase"], "ready-to-optimize")
             self.assertEqual(status["best_experiment"], "exp_0000")
+            self.assertIn("Exploration Readiness", cli(repo, "report").stdout)
+            self.assertIn("Exploration Readiness", cli(repo, "scratchpad").stdout)
 
             self.assertFalse((repo / "benchmark.py").exists())
             self.assertFalse((repo / "gate.py").exists())

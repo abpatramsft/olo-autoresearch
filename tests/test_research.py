@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_smoke import EXAMPLE, FIXED_AGENT, ROOT, cli, run
+from test_smoke import EXAMPLE, FIXED_AGENT, TAMPERING_AGENT, ROOT, cli, run
 
 sys.path.insert(0, str(ROOT / "src"))
 from olo.state import StateStore
@@ -104,6 +104,19 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(stored["attempts"], 0)
         self.assertEqual(stored["preflight_count"], 1)
         self.assertTrue((self.store.experiment_dir(node["experiment_id"]) / "preflight/001/diff.patch").exists())
+
+    def test_baseline_runtime_source_changes_cannot_be_bound_to_a_passing_check(self) -> None:
+        prepared = json.loads(cli(self.repo, "baseline", "--prepare").stdout)
+        (Path(prepared["worktree"]) / self.target).write_text(TAMPERING_AGENT, encoding="utf-8")
+        result = cli(self.repo, "run", "exp_0000", "--check", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        outcome = json.loads(result.stdout)
+        self.assertEqual(outcome["status"], "check-failed")
+        self.assertIn(
+            "runtime-source-mutation",
+            {finding["category"] for finding in outcome["verification"]["findings"]},
+        )
+        self.assertEqual(self.store.graph()["nodes"]["exp_0000"]["attempts"], 0)
 
     def test_probe_records_results_without_promotion_or_attempt_charge(self) -> None:
         self.baseline()
@@ -244,6 +257,26 @@ class ResearchTests(unittest.TestCase):
         self.assertIsNone(self.store.best_node())
         prepared = json.loads(cli(self.repo, "baseline", "--prepare").stdout)
         self.assertNotEqual(prepared["branch"], "olo/exp_0000")
+
+    def test_final_test_rejects_incomplete_task_evidence_and_cannot_be_retried(self) -> None:
+        prepared = json.loads(cli(self.repo, "baseline", "--prepare").stdout)
+        worktree = Path(prepared["worktree"])
+        (worktree / "incomplete_final.py").write_text(
+            "import json, os\nfrom pathlib import Path\n"
+            "Path(os.environ['OLO_RESULT_PATH']).write_text("
+            "json.dumps({'score': 1, 'tasks': {'untraced': 1}}), encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        config = self.store.config()
+        config["protected_paths"].append("incomplete_final.py")
+        config["final_test"] = "python incomplete_final.py"
+        self.store.save_config(config)
+        self.baseline()
+        result = cli(self.repo, "finalize", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing task traces", json.loads(result.stdout)["error"])
+        self.assertEqual(self.store.config()["phase"], "finalized")
+        self.assertNotEqual(cli(self.repo, "finalize", check=False).returncode, 0)
 
     def test_invalidating_a_source_excludes_its_descendants(self) -> None:
         self.baseline()
