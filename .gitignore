@@ -1,4 +1,5 @@
 .olo/
+.olo-history/
 __pycache__/
 *.pyc
 .pytest_cache/
